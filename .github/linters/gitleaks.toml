@@ -1,0 +1,4 @@
+title = "shared-platform gitleaks config"
+
+[extend]
+useDefault = true

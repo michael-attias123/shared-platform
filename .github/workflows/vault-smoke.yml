@@ -1,0 +1,33 @@
+name: vault-smoke
+
+# End-to-end proof that GitHub Actions can read from the shared Vault with OIDC (no stored token):
+# GitHub OIDC token (audience "vault") -> jwt-github/smoke-* role -> kv/smoke/hello.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  read-secret:
+    name: read kv/smoke/hello
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ vars.VAULT_ADDR }}
+          method: jwt
+          path: jwt-github
+          role: smoke-${{ github.repository_owner }}-shared-platform
+          jwtGithubAudience: vault
+          secrets: |
+            kv/data/smoke/hello message | SMOKE_MESSAGE
+      - name: Check the value arrived
+        run: |
+          test -n "$SMOKE_MESSAGE"
+          echo "read ${#SMOKE_MESSAGE} characters from the shared Vault"

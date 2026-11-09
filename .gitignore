@@ -1,0 +1,19 @@
+# OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Secrets never live in this repo (they're in ~/.config/platform and ~/.config/qops)
+*.pem
+!vault-config/clusters/*.pub.pem
+*.key
+.env
+.env.*
+vault-init.json
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

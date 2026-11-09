@@ -1,0 +1,166 @@
+#cloud-config
+# First boot of the shared Vault VM. Vault listens on 127.0.0.1 only; Caddy terminates TLS on 443.
+# Rendered by OpenTofu (vault-server/compute.tf). Progress: /var/log/platform-bootstrap.log
+hostname: vault-1
+package_update: true
+packages:
+  - curl
+  - gnupg
+  - jq
+  - python3-venv
+  - unattended-upgrades
+  - iptables-persistent
+
+write_files:
+  - path: /etc/vault.d/vault.hcl
+    permissions: "0640"
+    content: |
+      ui            = true
+      disable_mlock = true   # recommended with integrated (raft) storage
+      api_addr      = "https://${vault_hostname}"
+      cluster_addr  = "https://127.0.0.1:8201"
+
+      storage "raft" {
+        path    = "/opt/vault/data"
+        node_id = "vault-1"
+      }
+
+      # Only Caddy (same host) talks to Vault. Caddy sets X-Forwarded-For, so audit logs and
+      # rate-limit quotas see the real client IP.
+      listener "tcp" {
+        address                          = "127.0.0.1:8200"
+        tls_disable                      = true
+        x_forwarded_for_authorized_addrs = "127.0.0.1"
+      }
+
+      # Auto-unseal with OCI KMS through the instance principal: no keys on disk, no human after a reboot.
+      seal "ocikms" {
+        key_id              = "${seal_key_id}"
+        crypto_endpoint     = "${crypto_endpoint}"
+        management_endpoint = "${management_endpoint}"
+        auth_type_api_key   = "false"
+      }
+
+  - path: /etc/caddy/Caddyfile
+    permissions: "0644"
+    content: |
+      {
+        auto_https disable_redirects
+      }
+      ${vault_hostname} {
+        tls {
+          issuer acme {
+            disable_http_challenge
+          }
+          protocols tls1.2 tls1.3
+        }
+        header Strict-Transport-Security "max-age=31536000"
+        reverse_proxy 127.0.0.1:8200
+      }
+
+  - path: /etc/logrotate.d/vault-audit
+    permissions: "0644"
+    content: |
+      /var/log/vault/audit.log {
+        daily
+        rotate 14
+        compress
+        missingok
+        notifempty
+        postrotate
+          systemctl kill -s HUP vault >/dev/null 2>&1 || true
+        endscript
+      }
+
+  - path: /usr/local/sbin/vault-snapshot
+    permissions: "0750"
+    content: |
+      #!/usr/bin/env bash
+      # Daily Raft snapshot -> Object Storage (instance principal). The token is a periodic, snapshot-only
+      # token installed by `make vault-snapshot-setup`; until then this does nothing.
+      set -euo pipefail
+      token_file=/etc/vault.d/snapshot.token
+      if [[ ! -s "$token_file" ]]; then echo "no snapshot token yet; run make vault-snapshot-setup"; exit 0; fi
+      export VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN="$(cat "$token_file")"
+      vault token renew >/dev/null
+      snap="$(mktemp /var/tmp/vault-XXXXXX.snap)"
+      trap 'rm -f "$snap"' EXIT
+      vault operator raft snapshot save "$snap"
+      /opt/oci-cli/bin/oci os object put --auth instance_principal --namespace "${os_namespace}" \
+        --bucket-name "${snapshot_bucket}" --name "vault-$(date -u +%Y-%m-%dT%H%M%SZ).snap" --file "$snap" --force
+      echo "snapshot uploaded"
+
+  - path: /etc/systemd/system/vault-snapshot.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Vault Raft snapshot to OCI Object Storage
+      After=vault.service
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/vault-snapshot
+
+  - path: /etc/systemd/system/vault-snapshot.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Daily Vault snapshot
+      [Timer]
+      OnCalendar=*-*-* 02:30:00
+      RandomizedDelaySec=900
+      Persistent=true
+      [Install]
+      WantedBy=timers.target
+
+  - path: /usr/local/sbin/platform-bootstrap
+    permissions: "0700"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec >>/var/log/platform-bootstrap.log 2>&1
+      echo "== $(date -Is) bootstrap start"
+
+      # 1 GB of RAM: add swap so package installs and snapshots never OOM.
+      if [[ ! -f /swapfile ]]; then
+        fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+
+      # Oracle's Ubuntu images reject everything except SSH at the host firewall; allow HTTPS too.
+      # (Whether 443 is reachable at all is decided by the VCN security list: expose_public.)
+      iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+      netfilter-persistent save || true
+
+      install -d -m 0755 /etc/apt/keyrings
+      curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor --yes -o /etc/apt/keyrings/hashicorp.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+        > /etc/apt/sources.list.d/hashicorp.list
+      curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/caddy.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
+        > /etc/apt/sources.list.d/caddy.list
+      apt-get update
+      # Keep our config files (written above) when the packages install their defaults.
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold \
+        "vault=${vault_version}-1" caddy
+      apt-mark hold vault
+
+      install -d -o vault -g vault -m 0750 /opt/vault/data /var/log/vault
+      chown root:vault /etc/vault.d/vault.hcl
+      systemctl enable --now vault
+      systemctl enable --now caddy
+      systemctl restart caddy
+
+      if [[ ! -x /opt/oci-cli/bin/oci ]]; then
+        python3 -m venv /opt/oci-cli
+        /opt/oci-cli/bin/pip install --quiet oci-cli
+      fi
+      systemctl daemon-reload
+      systemctl enable --now vault-snapshot.timer
+
+      until curl -s -o /dev/null http://127.0.0.1:8200/v1/sys/health; do sleep 2; done
+      echo "vault status:"; VAULT_ADDR=http://127.0.0.1:8200 vault status || true
+      echo "== $(date -Is) bootstrap done"
+      touch /var/lib/platform-bootstrap.done
+
+runcmd:
+  - [/usr/local/sbin/platform-bootstrap]
