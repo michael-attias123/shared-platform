@@ -1,0 +1,18 @@
+# QuantumOps: github.com/michael-attias123/QuantumOps (k3s cluster "qops" on OCI).
+repo: michael-attias123/QuantumOps
+vault:
+  roles:
+    # Workflows on main (applies, image tag bumps).
+    - role: main
+      ref: refs/heads/main
+    # Plans on pull requests (same-repo PRs only: forks get no OIDC token).
+    - role: pr
+      ref: "refs/pull/*"
+  # External Secrets in the cluster: role quantumops-external-secrets-external-secrets on jwt-k8s-qops.
+  kubernetes:
+    - { cluster: qops, namespace: external-secrets, service_account: external-secrets }
+  shared_credentials: [supabase]
+  # What scripts/seed.sh fills, per path under kv/quantumops/. QuantumOps' `make seed-secrets` writes tailscale
+  # from its OpenTofu outputs (the Kubernetes operator's OAuth client).
+  secrets:
+    tailscale: [oauth_client_id, oauth_client_secret]
