@@ -33,6 +33,13 @@ resource "vault_policy" "platform_plan" {
     path "sys/audit" {
       capabilities = ["read", "sudo"]
     }
+    # So are the auth mounts' tuning (the provider reads it for every auth method). Read only: no update.
+    path "sys/mounts/auth/+/tune" {
+      capabilities = ["read", "sudo"]
+    }
+    path "sys/auth/+/tune" {
+      capabilities = ["read", "sudo"]
+    }
     # No project secrets, and no token tricks.
     path "kv/data/+" {
       capabilities = ["deny"]

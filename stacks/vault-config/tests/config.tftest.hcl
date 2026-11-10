@@ -133,8 +133,12 @@ run "platform_ci_roles" {
     error_message = "platform-apply can't set the admin's password."
   }
   assert {
-    condition     = !strcontains(vault_policy.platform_plan.policy, "create")
+    condition     = !strcontains(vault_policy.platform_plan.policy, "create") && !strcontains(vault_policy.platform_plan.policy, "update")
     error_message = "platform-plan only reads."
+  }
+  assert {
+    condition     = strcontains(vault_policy.platform_plan.policy, "path \"sys/mounts/auth/+/tune\" {\n  capabilities = [\"read\", \"sudo\"]")
+    error_message = "A plan reads every auth mount's tuning, which Vault only shows with sudo."
   }
   assert {
     condition     = vault_jwt_auth_backend_role.platform_drift.bound_claims["ref"] == "refs/heads/main" && vault_jwt_auth_backend_role.platform_drift.token_policies == toset(["platform-plan"])
