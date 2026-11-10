@@ -33,7 +33,7 @@ resource "vault_policy" "platform_plan" {
     path "sys/audit" {
       capabilities = ["read", "sudo"]
     }
-    # So are the auth mounts' tuning (the provider reads it for every auth method). Read only: no update.
+    # So are the auth mounts' tuning (the provider reads it for every auth method); reading is all the role gets.
     path "sys/mounts/auth/+/tune" {
       capabilities = ["read", "sudo"]
     }
