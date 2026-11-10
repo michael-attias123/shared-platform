@@ -47,9 +47,8 @@ github:
   # VAULT_ADDR was set by hand for HM1, before the baseline: the first apply imports it.
   adopt_vault_addr: true
 # The downstream check (docs/contract.md): every shared-platform PR runs this workflow in the repo before
-# it merges. After a merge that changes house-manager's plan, the platform starts its apply.
+# it merges. After a merge that changes house-manager's plan, the platform sends platform-changed, and
+# house-manager's infra.yml applies main.
 downstream:
   workflow: platform-check.yml
-  apply:
-    workflow: infra.yml
-    inputs: { apply: "true" }
+  changed_event: platform-changed

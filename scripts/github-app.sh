@@ -17,12 +17,14 @@ APP="${1:-}"
 OWNER="${GITHUB_OWNER:-michael-attias123}"
 
 # Repository permissions. The project bot covers what its OpenTofu github stack manages (branch rules,
-# Actions variables and secrets); the platform bot also dispatches workflows and comments across repos.
+# Actions variables and secrets); the platform bot also starts workflows in the projects' repos
+# (actions: write), reads the plan notices on those runs (checks: read) and sends repository_dispatch
+# events, which GitHub ties to contents: write.
 case "$APP" in
   platform-bot)
     KV_PATH="platform/github-app"
     ID_KEY="app_id" KEY_KEY="private_key"
-    PERMS='{"metadata":"read","contents":"read","actions":"write","administration":"write","actions_variables":"write","issues":"write","pull_requests":"write"}'
+    PERMS='{"metadata":"read","contents":"write","actions":"write","checks":"read","administration":"write","actions_variables":"write","issues":"write","pull_requests":"write"}'
     ;;
   *)
     project="${APP%-bot}"

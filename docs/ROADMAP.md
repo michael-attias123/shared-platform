@@ -27,10 +27,9 @@ through Vault, and use the building blocks at `main` ([contract.md](contract.md)
   in SP5, with the `grafana-alerts` module whose file layout it checks. It doesn't move in SP1.
 - **The downstream check needs no receiver credentials.** The platform starts each project's
   `platform-check.yml`, waits for the run and reads its result, so a project never reports back with
-  `platform-bot` and there is no `report_to` input.
-- **After a merge the platform starts the project's own apply workflow** (`workflow_dispatch`, declared under
-  `downstream.apply`), not a `platform-changed` `repository_dispatch`: that event needs write access to the
-  repo's contents, and `platform-bot` only reads contents.
+  `platform-bot`; `report_to` only names the run.
+- **`platform-bot` has Contents: write** on the repos it is installed on: GitHub ties `repository_dispatch`
+  (`platform-changed`) to it.
 - **`project-changed` waits for SP5,** where it first has something to trigger (the grafana stack), and where a
   project gets a credential to send it. Until then `platform-apply.yml` can be started from the Actions tab.
 - **Secret scanning is set by a script** (`stacks/github/scripts/repo-security.sh`, after each apply and
@@ -89,7 +88,7 @@ grafana:
   gitsync: { path: observability/dashboards }
   alert_routing: observability/alerting/policies.yaml   # subtree, read from the project repo at plan time
 github: { baseline: true, allowed_actions: [denoland/setup-deno@*] }
-downstream: { workflow: platform-check.yml, apply: { workflow: infra.yml, inputs: { apply: "true" } } }
+downstream: { workflow: platform-check.yml, changed_event: platform-changed }
 ```
 
 ## Work, as PRs in order
@@ -150,8 +149,8 @@ downstream: { workflow: platform-check.yml, apply: { workflow: infra.yml, inputs
   - db-migrate, prices, venues, price-probe and telemetry use `vault-env`.
   - The GitHub provider uses a `house-manager-bot` installation token instead of `GH_ADMIN_TOKEN`.
 - **Tools:** delete the local copies of the 5 tools and their tests; CI uses `tools/` at `PLATFORM_REF`.
-- **`platform-check.yml`:** a new workflow that receives the downstream check (`workflow_dispatch`, inputs `platform_ref` and `request_id`; [contract.md](contract.md)). It runs CI + plan at that ref and uploads the result. Not in house-manager#39: it follows as a small PR once SP4 is merged, and until then the check reports "no receiver yet".
-- **Apply after a platform change:** `infra.yml`'s existing "apply main" run from the Actions tab; the platform starts it.
+- **`platform-check.yml`:** a new workflow that receives the downstream check (`workflow_dispatch`, inputs `platform_ref` and `report_to`; [contract.md](contract.md)). It runs the path-rule tests and a full plan at that ref; the run's conclusion is the answer.
+- **`platform-changed`:** a `repository_dispatch` trigger on `infra.yml` that applies main.
 - **Kept for rollback:** SOPS stays in this PR. Merge gate: the plan shows no change except Actions secrets → variables.
 
 ### SP4: github stack + platform CI/CD
@@ -165,7 +164,7 @@ downstream: { workflow: platform-check.yml, apply: { workflow: infra.yml, inputs
   - `ci.yml`: changed stacks only, through `tools/changes.py` and `.platform/changes.toml`;
   - `platform-apply.yml`: plans on a PR; on merge applies in order vault-config → grafana (SP5) → github, each through `tofu-stack.yml`, with a destroy guard. Destroying a KV mount, auth backend, audit device, policy or ruleset needs the `allow-destroy` label. (The state bucket is laptop-only and has `prevent_destroy`.)
   - `drift.yml`: every 6 hours, read-only;
-  - `downstream.yml`, a required check: start `platform-check` in each project, wait, post one comment with each project's plan summary, fail if any failed. After merge, `platform-apply.yml` checks again and starts the apply of each project whose plan isn't empty.
+  - `downstream.yml`, a required check: start `platform-check` in each project, wait, post one comment with each project's plan summary, fail if any failed. After merge, `platform-apply.yml` checks again and sends `platform-changed` to each project whose plan isn't empty.
   - `platform-check.yml`: this repo's own receiver (it plans `examples/consumer`), so the check is exercised on every PR even before a project has one.
 - **Project changes** (SP5): when house-manager's alert routing or project declaration inputs change on its main, the platform applies `grafana`.
 
@@ -186,7 +185,7 @@ downstream: { workflow: platform-check.yml, apply: { workflow: infra.yml, inputs
   - **Notification tree:** the root is `email-owner`, with one route per project (`project=<name>`). Its children come from the file the project names in `alert_routing`, read with `data "github_repository_file"` at plan time.
   - **Per-project tokens:** a service account (Editor) token per project, plus the SM token, Faro URL and OTLP tokens. All are written to `kv/<project>/platform/grafana`.
   - **Platform folder:** an SM check on Vault's `/v1/sys/health` with a "Vault down/sealed" alert, and a free-tier usage dashboard with alerts at 80% (series, logs, traces, SM executions). It uses the stack's usage data source; its uid gets verified when the stack is built.
-- **When a token rotates:** after an apply that rotated a token, the project's plan has changes, so the platform starts its apply (`downstream.apply`), which re-applies its Edge Function secrets.
+- **When a token rotates:** after an apply that rotated a token, the project's plan has changes, so the platform sends it `platform-changed`, and its apply re-applies its Edge Function secrets.
 - **`project-changed`:** the way for a project to ask for a grafana apply, and the credential it sends it with.
 
 ### HM2: house-manager hands over Grafana + removes SOPS

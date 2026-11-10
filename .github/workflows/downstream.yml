@@ -2,7 +2,8 @@ name: downstream
 
 # Projects use this repo at main, so a change here is tested against them before it merges
 # (docs/contract.md): each project that declares a `downstream` receiver in projects/<name>.yaml runs its
-# own CI and plan with this PR's commit as platform_ref (tools/downstream.py). One PR comment lists every
+# own CI and plan with this PR's commit as platform_ref (tools/downstream.py). That runs this PR's tools
+# with the project's own credentials, so it is refused for a fork's PR. One PR comment lists every
 # project's result; a failed project fails this job, and `downstream` is a required check.
 # It runs on every PR, and passes at once when the PR touches nothing a project can see (docs, runbooks).
 
@@ -68,7 +69,7 @@ jobs:
         if: steps.diff.outputs.projects == 'true'
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
-        run: python3 tools/downstream.py check --ref "$SHA" --comment "$RUNNER_TEMP/downstream.md"
+        run: python3 tools/downstream.py check --ref "$SHA" --pr "$PR" --comment "$RUNNER_TEMP/downstream.md"
       - name: Post the results on the PR
         if: ${{ !cancelled() && steps.diff.outputs.projects == 'true' && hashFiles('tools/pr_comment.sh') != '' }}
         env:

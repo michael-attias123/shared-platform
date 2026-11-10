@@ -5,8 +5,8 @@ name: platform-apply
 #   main           apply each in order, behind the destroy guard: deleting a KV mount, an auth method, an
 #                  audit device, a policy or a ruleset needs the allow-destroy label on the PR
 #   Actions tab    apply main again (after a change in Vault that a stack reads)
-# After an apply on main, projects whose own plan now has changes get their apply started
-# (tools/downstream.py notify). oci-foundation and vault-server are laptop-only: everything here stands on them.
+# After an apply on main, projects whose own plan now has changes are sent `platform-changed` and apply
+# their main (tools/downstream.py notify). oci-foundation and vault-server are laptop-only: everything here stands on them.
 # Credentials come from kv/platform/* through the job's OIDC token: the platform-plan role on pull
 # requests (reads only), platform-apply on main (stacks/vault-config/platform_ci.tf).
 
@@ -103,7 +103,7 @@ jobs:
         kv/data/platform/github-app app_id | GITHUB_APP_ID
         kv/data/platform/github-app private_key | GITHUB_APP_PRIVATE_KEY
 
-  # After the applies: each project's plan against the new main; a project with changes gets its apply started.
+  # After the applies: each project's plan against the new main; a project with changes is sent platform-changed.
   notify:
     name: notify projects
     needs: github
@@ -131,7 +131,7 @@ jobs:
           private-key: ${{ env.GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
       - run: pip install 'PyYAML>=6,<7'
-      - name: Check each project and start the applies
+      - name: Check each project and tell the changed ones
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

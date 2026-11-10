@@ -45,23 +45,29 @@ declaring a receiver in its `projects/<name>.yaml`:
 ```yaml
 downstream:
   workflow: platform-check.yml        # in the project's repo, on its default branch
-  apply:                              # optional: started after a merge that changes the project's plan
-    workflow: infra.yml
-    inputs: { apply: "true" }
+  changed_event: platform-changed     # optional: sent after a merge that changes the project's plan
 ```
 The receiver ([this repo's own](../.github/workflows/platform-check.yml) is the example):
-- **Trigger:** `workflow_dispatch` with the inputs `platform_ref` (the commit to test) and `request_id`.
-- **`run-name`** must contain `${{ inputs.request_id }}`: that is how the platform finds the run.
+- **Trigger:** `workflow_dispatch` on the default branch, with the inputs `platform_ref` (the commit to
+  test) and `report_to` (the shared-platform PR number; empty after a merge).
+- **`run-name`** is `Platform check <platform_ref> (shared-platform#<report_to>)`, without the bracket when
+  `report_to` is empty. That is how the platform finds the run.
 - **What it runs:** the project's CI and a `tofu-stack.yml` plan of each stack, all with
   `platform-ref: ${{ inputs.platform_ref }}`. It must change nothing: plan, never apply.
 - **Result:** the run's conclusion. Success lets the platform PR merge; anything else blocks it.
-- **Optional report:** an artifact named `platform-check` holding `result.json`,
-  `{"stacks": [{"name": "infra", "exitcode": "<tofu-stack exitcode>", "summary": "<tofu-stack summary>"}]}`.
-  The PR comment shows it, and an `exitcode` of `2` is what starts `downstream.apply` after the merge.
+- **Plan results:** one notice per stack, titled `<stack> plan`, whose text starts with `no changes`,
+  `changes` or `not planned`. The PR comment shows them. After the merge the check runs once more against
+  main, and `changes` is what sends `changed_event` (a `repository_dispatch`), on which the project applies
+  its main.
 
-It needs no credential for shared-platform: `platform-bot` starts the run and reads its result. Until the
-receiver file exists on the project's default branch, the check lists the project as "no receiver yet" and
-doesn't block.
+Limits and rules:
+- **`uses: ...@main` lines stay at main** in the project (GitHub takes no ref from an input there). Changes
+  to the reusable workflows themselves are tested by `building-blocks.yml` against `examples/consumer`.
+- **Own branches only.** The check runs the PR's tools with the project's credentials, so `downstream.yml`
+  refuses a fork's PR.
+- **No credential for shared-platform is needed:** `platform-bot` starts the run and reads its result.
+- **Until the receiver file exists** on the project's default branch, the check lists the project as "no
+  receiver yet" and doesn't block.
 
 ## The GitHub baseline
 A project with `github: { baseline: true }` gets, from the platform's `github` stack:

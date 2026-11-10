@@ -6,39 +6,42 @@ Projects follow shared-platform at main, so a change here must not break them.
 Each project that declares a receiver in projects/<name>.yaml
 
     downstream:
-      workflow: platform-check.yml          # in the project's repo, on its default branch
-      apply:                                # optional: what to start after a merge that changes its plan
-        workflow: infra.yml
-        inputs: { apply: "true" }
+      workflow: platform-check.yml     # in the project's repo, on its default branch
+      changed_event: platform-changed  # optional: sent after a merge that changes the project's plan
 
 gets a workflow_dispatch of that workflow with the inputs platform_ref (the
-commit to test) and request_id. The receiver puts request_id in its run-name
-(that is how its run is found) and may upload an artifact `platform-check`
-holding result.json: {"stacks": [{"name": ..., "exitcode": "0"|"2"|"skip", "summary": ...}]}.
+commit to test) and report_to (the shared-platform PR number, empty after a
+merge). The receiver names its run `Platform check <platform_ref>
+(shared-platform#<report_to>)`, which is how the run is found. The run's
+conclusion is the answer. Each plan's result is a notice on the run titled
+`<stack> plan` that starts with `no changes`, `changes` or `not planned`.
 
   check   dispatch, wait for every run, write the PR comment, exit 1 when a
           project failed, timed out or can't be reached. A project whose
           receiver file doesn't exist yet is reported and doesn't block.
-  notify  the same after a merge, then start the `apply` workflow of each
-          project whose plan has changes.
+  notify  the same after a merge, then send changed_event (a
+          repository_dispatch) to each project whose plan has changes.
 
-Usage: downstream.py check|notify --ref SHA [--projects DIR] [--comment FILE]
-                                  [--timeout SECONDS] [--poll SECONDS]
-Env: GH_TOKEN (platform-bot's installation token: actions write on the
-projects' repos), RUN_URL. Prints project names, results and run links only.
+A project's check runs this commit's tools with the project's own
+credentials, so the caller must only pass commits of shared-platform's own
+branches, never a fork's (downstream.yml refuses fork PRs).
+
+Usage: downstream.py check|notify --ref SHA [--pr NUMBER] [--projects DIR]
+                                  [--comment FILE] [--timeout SECONDS] [--poll SECONDS]
+Env: GH_TOKEN (platform-bot's installation token: Actions write on the
+projects' repos, Checks read for the plan notices, and Contents write for
+changed_event), RUN_URL. Prints project names, results and run links only.
 """
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import re
 import subprocess
 import sys
 import time
-import uuid
-import zipfile
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,8 +49,8 @@ MARKER = "<!-- downstream-check -->"
 BLOCKING = {"failed", "timeout", "unreachable", "error"}
 REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 WORKFLOW = re.compile(r"^[A-Za-z0-9_.-]+\.ya?ml$")
-INPUT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
-MAX_ARTIFACT = 1_000_000
+EVENT = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+PLAN_NOTICE = re.compile(r"^(?P<stack>.+) plan$")
 
 
 @dataclass(frozen=True)
@@ -55,8 +58,7 @@ class Target:
     project: str
     repo: str
     workflow: str
-    apply_workflow: str = ""
-    apply_inputs: tuple[tuple[str, str], ...] = ()
+    changed_event: str = ""
 
 
 @dataclass
@@ -66,7 +68,7 @@ class Result:
     detail: str = ""
     url: str = ""
     stacks: list[dict[str, str]] = field(default_factory=list)
-    applied: bool = False
+    notified: bool = False
 
     @property
     def changed(self) -> bool:
@@ -86,17 +88,12 @@ def load_targets(projects_dir: str) -> list[Target]:
         if not down:
             continue
         repo, workflow = str(doc.get("repo", "")), str(down.get("workflow", ""))
-        apply = down.get("apply") or {}
-        apply_workflow = str(apply.get("workflow", ""))
-        inputs = apply.get("inputs") or {}
+        event = str(down.get("changed_event") or "")
         if not REPO.match(repo) or not WORKFLOW.match(workflow):
             raise ValueError(f"{path.name}: downstream needs repo (owner/name) and workflow (a .yml file name)")
-        if apply_workflow and not WORKFLOW.match(apply_workflow):
-            raise ValueError(f"{path.name}: downstream.apply.workflow must be a .yml file name")
-        if not isinstance(inputs, dict) or not all(INPUT_NAME.match(str(k)) for k in inputs):
-            raise ValueError(f"{path.name}: downstream.apply.inputs must be a map of input names to values")
-        targets.append(Target(path.stem, repo, workflow, apply_workflow,
-                              tuple((str(k), str(v)) for k, v in inputs.items())))
+        if event and not EVENT.match(event):
+            raise ValueError(f"{path.name}: downstream.changed_event must be an event name like platform-changed")
+        targets.append(Target(path.stem, repo, workflow, event))
     return targets
 
 
@@ -114,75 +111,69 @@ class GitHub:
         found = re.search(r"\(HTTP (\d{3})\)", proc.stderr)
         return int(found.group(1)) if found else 0, {}
 
-    def download(self, path: str) -> bytes | None:
-        proc = subprocess.run(["gh", "api", path], capture_output=True, check=False)
-        return proc.stdout if proc.returncode == 0 else None
-
 
 def clean(text: object, limit: int = 160) -> str:
     """Text from a project's run goes into a PR comment: plain words and counts only."""
     return re.sub(r"[^A-Za-z0-9 .,:;()+_/-]", "", str(text))[:limit].strip()
 
 
-def read_stacks(archive: bytes | None) -> list[dict[str, str]]:
-    """The stacks in a platform-check artifact; anything malformed counts as no report."""
-    if not archive or len(archive) > MAX_ARTIFACT:
-        return []
-    try:
-        with zipfile.ZipFile(io.BytesIO(archive)) as z:
-            info = z.getinfo("result.json")
-            if info.file_size > MAX_ARTIFACT:
-                return []
-            doc = json.loads(z.read(info))
-        out = []
-        for s in doc["stacks"][:20]:
-            exitcode = str(s.get("exitcode", ""))
-            out.append({"name": clean(s.get("name", "?"), 60) or "?",
-                        "exitcode": exitcode if exitcode in ("0", "2", "skip") else "?",
-                        "summary": clean(s.get("summary", ""))})
-        return out
-    except (KeyError, TypeError, ValueError, AttributeError, zipfile.BadZipFile):
-        return []
+def read_stacks(annotations: object) -> list[dict[str, str]]:
+    """The plan results among a job's annotations: notices titled `<stack> plan`."""
+    out = []
+    for a in annotations if isinstance(annotations, list) else []:
+        if not isinstance(a, dict) or a.get("annotation_level") != "notice":
+            continue
+        found = PLAN_NOTICE.match(str(a.get("title") or ""))
+        if not found:
+            continue
+        message = str(a.get("message") or "").strip()
+        exitcode = ("0" if message.startswith("no changes") else "2" if message.startswith("changes")
+                    else "skip" if message.startswith("not planned") else "?")
+        out.append({"name": clean(found.group("stack"), 60) or "?", "exitcode": exitcode, "summary": clean(message)})
+    return out
+
+
+def run_title(ref: str, pr: str) -> str:
+    return f"Platform check {ref}" + (f" (shared-platform#{pr})" if pr else "")
 
 
 class Check:
-    def __init__(self, gh: GitHub, ref: str, timeout: float = 1800, poll: float = 15,
-                 sleep=time.sleep, clock=time.monotonic):
-        self.gh, self.ref, self.poll, self.sleep, self.clock = gh, ref, poll, sleep, clock
+    def __init__(self, gh: GitHub, ref: str, pr: str = "", timeout: float = 1800, poll: float = 15,
+                 sleep=time.sleep, clock=time.monotonic, now=lambda: datetime.now(timezone.utc)):
+        self.gh, self.ref, self.pr, self.poll, self.sleep, self.clock = gh, ref, pr, poll, sleep, clock
+        # A run of an earlier attempt at the same commit has the same name: only newer runs count.
+        self.since = (now() - timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
         self.deadline = clock() + timeout
         self.find_deadline = clock() + min(timeout, 180)
 
-    def dispatch(self, repo: str, workflow: str, inputs: dict[str, str]) -> tuple[int, str]:
-        """Starts a workflow on the repo's default branch. (HTTP status, default branch)."""
+    def default_branch(self, repo: str) -> str | None:
         status, info = self.gh.call("GET", f"repos/{repo}")
-        if status != 200 or not isinstance(info, dict):
-            return -1, ""
-        branch = str(info.get("default_branch", "main"))
-        status, _ = self.gh.call("POST", f"repos/{repo}/actions/workflows/{workflow}/dispatches",
-                                 {"ref": branch, "inputs": inputs})
-        return status, branch
+        return str(info.get("default_branch", "main")) if status == 200 and isinstance(info, dict) else None
 
-    def start(self, target: Target) -> tuple[Result, str]:
-        result, request_id = Result(target), uuid.uuid4().hex[:16]
-        status, branch = self.dispatch(target.repo, target.workflow,
-                                       {"platform_ref": self.ref, "request_id": request_id})
-        if status == -1:
+    def start(self, target: Target) -> Result:
+        result = Result(target)
+        branch = self.default_branch(target.repo)
+        if branch is None:
             result.status, result.detail = "unreachable", "platform-bot can't see the repository (is it installed there?)"
-        elif status == 404:
+            return result
+        status, _ = self.gh.call("POST", f"repos/{target.repo}/actions/workflows/{target.workflow}/dispatches",
+                                 {"ref": branch, "inputs": {"platform_ref": self.ref, "report_to": self.pr}})
+        if status == 404:
             result.status, result.detail = "no-receiver", f"{target.workflow} is not on {branch} yet"
         elif status != 200:
             result.detail = f"the dispatch was refused (HTTP {status})"
         else:
             result.status = "pending"
-        return result, request_id
+        return result
 
-    def find_run(self, target: Target, request_id: str) -> dict | None:
+    def find_run(self, target: Target) -> dict | None:
         path = f"repos/{target.repo}/actions/workflows/{target.workflow}/runs?event=workflow_dispatch&per_page=30"
+        title = run_title(self.ref, self.pr)
         while True:
             status, data = self.gh.call("GET", path)
             if status == 200 and isinstance(data, dict):
-                for run in data.get("workflow_runs") or []:
-                    if request_id in str(run.get("display_title", "")) or request_id in str(run.get("name", "")):
+                for run in data.get("workflow_runs") or []:  # newest first
+                    if str(run.get("display_title", "")) == title and str(run.get("created_at", "")) >= self.since:
                         return run
             if self.clock() >= self.find_deadline:
                 return None
@@ -199,27 +190,29 @@ class Check:
         return run
 
     def stacks(self, target: Target, run_id: object) -> list[dict[str, str]]:
-        status, data = self.gh.call("GET", f"repos/{target.repo}/actions/runs/{run_id}/artifacts")
+        status, data = self.gh.call("GET", f"repos/{target.repo}/actions/runs/{run_id}/jobs?per_page=100")
         if status != 200 or not isinstance(data, dict):
             return []
-        for artifact in data.get("artifacts") or []:
-            if artifact.get("name") == "platform-check" and not artifact.get("expired"):
-                return read_stacks(self.gh.download(f"repos/{target.repo}/actions/artifacts/{artifact['id']}/zip"))
-        return []
+        out = []
+        for job in data.get("jobs") or []:
+            status, annotations = self.gh.call("GET", f"repos/{target.repo}/check-runs/{job.get('id')}/annotations")
+            if status == 200:
+                out += read_stacks(annotations)
+        return out[:20]
 
     def run(self, targets: list[Target]) -> list[Result]:
         # Dispatch everything first: the projects run side by side.
         started = [self.start(t) for t in targets]
         results = []
-        for result, request_id in started:
+        for result in started:
             results.append(result)
             if result.status != "pending":
                 continue
             target = result.target
-            run = self.find_run(target, request_id)
+            run = self.find_run(target)
             if run is None:
                 result.status = "error"
-                result.detail = "its run didn't appear (does the receiver put request_id in run-name?)"
+                result.detail = f"its run didn't appear (is its run-name '{run_title('<platform_ref>', '<report_to>')}'?)"
                 continue
             result.url = str(run.get("html_url", ""))
             done = self.wait(target, run)
@@ -231,14 +224,15 @@ class Check:
             result.stacks = self.stacks(target, done["id"])
         return results
 
-    def apply_changed(self, results: list[Result]) -> None:
-        """After a merge: start the apply workflow of each project whose plan has changes."""
+    def notify_changed(self, results: list[Result]) -> None:
+        """After a merge: tell each project whose plan has changes, so it applies its main."""
         for r in results:
-            if r.status == "passed" and r.changed and r.target.apply_workflow:
-                status, _ = self.dispatch(r.target.repo, r.target.apply_workflow, dict(r.target.apply_inputs))
-                r.applied = status == 200
-                if not r.applied:
-                    r.status, r.detail = "error", f"starting {r.target.apply_workflow} was refused (HTTP {status})"
+            if r.status == "passed" and r.changed and r.target.changed_event:
+                status, _ = self.gh.call("POST", f"repos/{r.target.repo}/dispatches",
+                                         {"event_type": r.target.changed_event})
+                r.notified = status == 200
+                if not r.notified:
+                    r.status, r.detail = "error", f"sending {r.target.changed_event} was refused (HTTP {status})"
 
 
 LABELS = {"passed": "passed", "failed": "**failed**", "timeout": "**timed out**", "unreachable": "**unreachable**",
@@ -258,8 +252,8 @@ def render(results: list[Result], ref: str, run_url: str) -> str:
         if r.detail:
             label += f": {r.detail}"
         plans = "<br>".join(f"`{s['name']}`: {s['summary'] or 'exit code ' + s['exitcode']}" for s in r.stacks)
-        if r.applied:
-            plans += f"<br>started `{r.target.apply_workflow}`"
+        if r.notified:
+            plans += f"<br>sent `{r.target.changed_event}`"
         lines.append(f"| {r.target.project} | {label} | {plans} |")
     blocked = [r.target.project for r in results if r.status in BLOCKING]
     lines += ["", f"Blocked by: {', '.join(blocked)}." if blocked else "No project blocks this change."]
@@ -270,26 +264,27 @@ def main(argv: list[str] | None = None, gh: GitHub | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("mode", choices=["check", "notify"])
     parser.add_argument("--ref", required=True, help="the shared-platform commit to test")
+    parser.add_argument("--pr", default="", help="the shared-platform PR number (names the projects' runs)")
     parser.add_argument("--projects", default="projects")
     parser.add_argument("--comment", help="write the PR comment (markdown) to this file")
     parser.add_argument("--timeout", type=float, default=1800)
     parser.add_argument("--poll", type=float, default=15)
     args = parser.parse_args(argv)
-    if not re.fullmatch(r"[A-Za-z0-9._/-]+", args.ref):
-        print("::error::downstream: bad ref", file=sys.stderr)
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", args.ref) or not re.fullmatch(r"[0-9]*", args.pr):
+        print("::error::downstream: bad ref or PR number", file=sys.stderr)
         return 1
     try:
         targets = load_targets(args.projects)
     except (OSError, ValueError) as exc:
         print(f"::error::downstream: {exc}", file=sys.stderr)
         return 1
-    check = Check(gh or GitHub(), args.ref, args.timeout, args.poll)
+    check = Check(gh or GitHub(), args.ref, args.pr, args.timeout, args.poll)
     results = check.run(targets)
     if args.mode == "notify":
-        check.apply_changed(results)
+        check.notify_changed(results)
     for r in results:
         note = f" ({r.detail})" if r.detail else ""
-        started = f"; started {r.target.apply_workflow}" if r.applied else ""
+        started = f"; sent {r.target.changed_event}" if r.notified else ""
         print(f"{r.target.project}: {r.status}{note}{started} {r.url}".rstrip())
         if r.status in BLOCKING:
             print(f"::error::downstream: {r.target.project}: {r.status}{note}")

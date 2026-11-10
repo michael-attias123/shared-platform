@@ -1,10 +1,12 @@
 name: platform-check
-run-name: platform-check ${{ inputs.request_id }}
+run-name: Platform check ${{ inputs.platform_ref }}${{ inputs.report_to != '' && format(' (shared-platform#{0})', inputs.report_to) || '' }}
 
 # This repo's own receiver of the downstream check, and the example for projects (docs/contract.md):
 # shared-platform's downstream.yml starts it with the commit to test. It plans examples/consumer with the
-# tools and modules at that commit and reports each stack's result in the `platform-check` artifact.
-# A project's receiver looks the same, with its own CI jobs and stacks.
+# tools and modules at that commit and reports the plan's result as a notice titled `example plan`.
+# A project's receiver looks the same, with its own CI jobs and stacks. The run name is how the caller
+# finds the run. platform_ref runs that commit's tools here, so it is only ever a commit of this repo's
+# own branches (downstream.yml refuses fork PRs).
 
 on:
   workflow_dispatch:
@@ -13,8 +15,8 @@ on:
         description: The shared-platform commit to test.
         type: string
         required: true
-      request_id:
-        description: Set by the caller; it finds this run by it (see run-name).
+      report_to:
+        description: The shared-platform PR number this check is for (only names the run).
         type: string
         default: ''
 
@@ -22,6 +24,7 @@ permissions: {}
 
 jobs:
   plan:
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       id-token: write
@@ -41,18 +44,16 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: The stacks' results
+      - name: The plan's result
         env:
           EXITCODE: ${{ needs.plan.outputs.exitcode }}
-          SUMMARY: ${{ needs.plan.outputs.summary }}
-        run: |
-          jq -n '{stacks: [{name: "example", exitcode: env.EXITCODE, summary: env.SUMMARY}]}' > result.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: platform-check
-          path: result.json
-          retention-days: 1
-      - name: Fail when a stack failed
-        env:
           RESULT: ${{ needs.plan.result }}
-        run: '[[ "$RESULT" == success ]]'
+        run: |
+          [[ "$RESULT" == success ]] || { echo "::error::The plan of examples/consumer failed."; exit 1; }
+          case "$EXITCODE" in
+            0) msg="no changes" ;;
+            2) msg="changes" ;;
+            skip) msg="not planned: a provider was down" ;;
+            *) msg="unknown ($EXITCODE)" ;;
+          esac
+          echo "::notice title=example plan::$msg"
