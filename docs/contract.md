@@ -31,7 +31,7 @@ So `main` must never break a project. That is this repo's side of the deal:
 ## The building blocks
 | Block | Inputs that matter | The caller's job needs |
 |---|---|---|
-| `tofu-stack.yml` | `dir`, `mode` (plan / apply / drift), `vault-role`, `vault-secrets`, `guard-allow`, `guard-protect`, `pre-plan`, `post-apply`, `allow-outage`, `platform-ref` | `contents: read`, `id-token: write`, `actions: read`, plus `pull-requests: write` (plan) or `issues: write` (drift) |
+| `tofu-stack.yml` | `dir`, `mode` (plan / apply / drift), `vault-role`, `vault-secrets`, `github-app`, `guard-allow`, `guard-protect`, `pre-plan`, `post-apply`, `post-drift`, `allow-outage`, `platform-ref`. Hooks get `PLAN_JSON`, `GH_TOKEN` and the Vault values | `contents: read`, `id-token: write`, `actions: read`, plus `pull-requests: write` (plan) or `issues: write` (drift) |
 | `security.yml` | `shellcheck` (globs), `gitleaks-config`, `trivy-dir` | `contents: read` |
 | `gha-telemetry.yml` | `workflows`, `vault-role`, `vault-secrets` | `contents: read`, `actions: read`, `id-token: write` |
 | `vault-env` action | `addr` (`vars.VAULT_ADDR`), `role`, `secrets`, `export-token` | `id-token: write` |

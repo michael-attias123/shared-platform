@@ -4,7 +4,9 @@ name: tofu-stack
 # runs its infrastructure (docs/contract.md). The caller picks the mode:
 #   plan   pull requests: plan, then one PR comment per stack
 #   apply  main: plan to a file, guard it, apply exactly that file, post-apply script
-#   drift  schedule: plan, then open/update/close the stack's drift issue
+#   drift  schedule: plan, then open/update/close the stack's drift issue, post-drift script
+# Hooks run in dir with PLAN_JSON (the saved plan as JSON, while there is one), GH_TOKEN (the job's
+# token) and everything the earlier steps exported (Vault values, GITHUB_TOKEN with github-app).
 # Credentials come from the shared Vault (vault-secrets, through the job's OIDC
 # token), never from stored secrets. Tools and actions come from
 # shared-platform at platform-ref (default main); with another ref the stack's
@@ -68,6 +70,17 @@ on:
         description: Script (path from the repo root) run in dir after a successful apply.
         type: string
         default: ''
+      post-drift:
+        description: Script (path from the repo root) run in dir after the drift issue step (DRIFT_EXITCODE is 0, 2 or skip).
+        type: string
+        default: ''
+      github-app:
+        description: >-
+          Mint a GitHub App installation token for the caller's repo from GITHUB_APP_ID and
+          GITHUB_APP_PRIVATE_KEY (exported by vault-secrets) and export it as GITHUB_TOKEN, for the
+          stack's github provider.
+        type: boolean
+        default: false
       allow-outage:
         description: End with a warning, not a failure, when a provider is down (for scheduled runs).
         type: boolean
@@ -143,6 +156,23 @@ jobs:
           role: ${{ inputs.vault-role }}
           secrets: ${{ inputs.vault-secrets }}
           export-token: ${{ inputs.vault-export-token }}
+      - name: GitHub App token for the stack
+        id: app_token
+        if: inputs.github-app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ env.GITHUB_APP_ID }}
+          private-key: ${{ env.GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+      - name: Use the GitHub App token
+        if: inputs.github-app
+        env:
+          TOKEN: ${{ steps.app_token.outputs.token }}
+        run: |
+          [[ -n "$TOKEN" ]] || { echo "::error::no GitHub App token (GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY from Vault?)"; exit 1; }
+          echo "GITHUB_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "The github provider uses the GitHub App's installation token."
       - name: Extra variables
         if: inputs.env != ''
         env:
@@ -175,6 +205,13 @@ jobs:
       - name: Reached the providers
         if: steps.plan.outputs.exitcode != 'skip'
         run: 'true'
+      # The saved plan as JSON, for the guard and the hooks (PLAN_JSON). It holds variables in clear
+      # text, so it never leaves the runner and is removed in the last step.
+      - name: Plan as JSON
+        if: steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2'
+        run: |
+          tofu show -json "$RUNNER_TEMP/tfplan" > "$RUNNER_TEMP/plan.json"
+          echo "PLAN_JSON=$RUNNER_TEMP/plan.json" >> "$GITHUB_ENV"
       - name: Guard
         id: guard
         if: inputs.mode != 'drift' && steps.plan.outputs.exitcode == '2'
@@ -197,9 +234,7 @@ jobs:
             args+=(--allow-destroy)
             echo "The allow-destroy label is set: protected resources may be deleted."
           fi
-          tofu show -json "$RUNNER_TEMP/tfplan" > "$RUNNER_TEMP/plan.json"
-          python3 "$PLATFORM/tools/plan_guard.py" "${args[@]}" "$RUNNER_TEMP/plan.json"
-          rm -f "$RUNNER_TEMP/plan.json"
+          python3 "$PLATFORM/tools/plan_guard.py" "${args[@]}" "$PLAN_JSON"
       - name: Post the plan on the PR
         if: ${{ !cancelled() && inputs.mode == 'plan' && github.event_name == 'pull_request' }}
         env:
@@ -223,6 +258,7 @@ jobs:
         env:
           SCRIPT: ${{ inputs.post-apply }}
           PLAN_CHANGED: ${{ steps.plan.outputs.exitcode == '2' }}
+          GH_TOKEN: ${{ github.token }}
         run: '"$GITHUB_WORKSPACE/$SCRIPT"'
       - name: Drift issue
         if: inputs.mode == 'drift'
@@ -231,6 +267,13 @@ jobs:
           LABEL: ${{ inputs.drift-label }}
           EXITCODE: ${{ steps.plan.outputs.exitcode }}
         run: '"$PLATFORM/tools/drift_issue.sh" "$EXITCODE" "$RUNNER_TEMP/tfplan"'
+      - name: Post-drift script
+        if: inputs.mode == 'drift' && inputs.post-drift != ''
+        env:
+          SCRIPT: ${{ inputs.post-drift }}
+          DRIFT_EXITCODE: ${{ steps.plan.outputs.exitcode }}
+          GH_TOKEN: ${{ github.token }}
+        run: '"$GITHUB_WORKSPACE/$SCRIPT"'
       - name: Remove the plan
         if: always()
         working-directory: .
