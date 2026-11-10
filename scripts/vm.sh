@@ -23,7 +23,7 @@ run_script() {
   cmd_id="$(ocij instance-agent command create -c "$COMPARTMENT_ID" --display-name "platform-$(date +%s)" \
     --timeout-in-seconds "$timeout" --content "$content" --target "$target" | jq -r '.data.id')"
   [[ -n "$cmd_id" && "$cmd_id" != "null" ]] || die "Run Command was not created"
-  for _ in $(seq 1 $((timeout / 3 + 20))); do
+  for _ in $(seq 1 $(((timeout + 600) / 3))); do  # the agent may take minutes to pick a command up
     result="$(ocij instance-agent command-execution get --command-id "$cmd_id" --instance-id "$INSTANCE_ID" 2>/dev/null || true)"
     state="$(jq -r '.data."lifecycle-state" // empty' <<<"$result")"
     case "$state" in SUCCEEDED | FAILED | TIMED_OUT | CANCELED) break ;; esac

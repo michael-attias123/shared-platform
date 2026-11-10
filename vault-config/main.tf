@@ -24,10 +24,21 @@ resource "vault_quota_rate_limit" "global" {
   interval = 1
 }
 
+# Vault quotas need a concrete mount, so each login method gets its own limit (per client IP).
+# The human login is the strictest; machines log in a few times an hour at most.
+locals {
+  login_quotas = {
+    userpass   = { path = "auth/${vault_auth_backend.userpass.path}/", rate = 2 }
+    approle    = { path = "auth/${vault_auth_backend.approle.path}/", rate = 5 }
+    jwt-github = { path = "auth/${vault_jwt_auth_backend.github.path}/", rate = 10 }
+  }
+}
+
 resource "vault_quota_rate_limit" "login" {
-  name           = "login"
-  path           = "auth/"
-  rate           = 5
+  for_each       = local.login_quotas
+  name           = "login-${each.key}"
+  path           = each.value.path
+  rate           = each.value.rate
   interval       = 1
   block_interval = 60
 }

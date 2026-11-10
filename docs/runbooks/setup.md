@@ -19,6 +19,9 @@ make vault-bootstrap-status      # via Bastion; wait for "bootstrap done" (~5-10
 ```
 
 ## 3. Initialize (while nothing can reach it from outside)
+This runs over OCI Run Command (HTTPS), which also works behind proxies that block SSH. The VM encrypts the
+result to your SSH key with `age` and keeps it in a root-only file. The file is fetched in chunks, because Run
+Command returns at most about 1 KB of output, and it's deleted only after it decrypts on your computer.
 ```bash
 make vault-init
 ```
@@ -28,10 +31,12 @@ recovery. Vault unseals itself after reboots.
 
 ## 4. Open it, configure it, lock it down
 1. Set `expose_public = true` in `settings.auto.tfvars` (PR). Then `make plan STACK=vault-server` and
-   `make apply STACK=vault-server`. Wait about a minute for Caddy's certificate, then `make vault-health`.
+   `make apply STACK=vault-server`. Then run `make vault-tls-retry`: Caddy already tried to get the certificate
+   while 443 was closed and is backing off, so the restart makes it ask again now. Finally `make vault-health`.
 2. `make config-plan-root`, then `make config-apply-root`. This applies `vault-config` with the root token: KV,
    audit, rate limits, auth methods, projects.
-3. `make vault-admin`: choose the admin password (hidden prompt) and save it in your password manager.
+3. `make vault-admin`: sets a random 32-character admin password and puts it on your clipboard (never shown).
+   Paste it into your password manager. To type your own instead: `PROMPT=1 make vault-admin`.
 4. `make vault-login`.
 5. `make vault-mfa-enroll`: scan the QR code with your authenticator app.
 6. Set `enforce_admin_mfa = true` in `vault-config/settings.auto.tfvars` (PR). Then
