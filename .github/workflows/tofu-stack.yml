@@ -1,0 +1,237 @@
+name: tofu-stack
+
+# Plan, apply or drift-check one OpenTofu stack: the shared way every project
+# runs its infrastructure (docs/contract.md). The caller picks the mode:
+#   plan   pull requests: plan, then one PR comment per stack
+#   apply  main: plan to a file, guard it, apply exactly that file, post-apply script
+#   drift  schedule: plan, then open/update/close the stack's drift issue
+# Credentials come from the shared Vault (vault-secrets, through the job's OIDC
+# token), never from stored secrets. Tools and actions come from
+# shared-platform at platform-ref (default main); with another ref the stack's
+# `shared-platform.git//...?ref=main` module sources are rewritten to it in the
+# runner's checkout, so a project can test an unmerged platform branch.
+#
+# The caller's job needs: contents: read, id-token: write, actions: read, and
+# pull-requests: write (plan) or issues: write (drift).
+
+on:
+  workflow_call:
+    inputs:
+      dir:
+        description: Stack directory in the caller's repo.
+        type: string
+        required: true
+      mode:
+        description: plan, apply or drift.
+        type: string
+        required: true
+      name:
+        description: The stack's label in PR comments and drift issues (default dir).
+        type: string
+        default: ''
+      vault-role:
+        description: JWT role in the shared Vault (empty skips the Vault login).
+        type: string
+        default: ''
+      vault-secrets:
+        description: vault-env lines, `<path> <key> | <ENV>`.
+        type: string
+        default: ''
+      vault-export-token:
+        description: Export VAULT_ADDR/VAULT_TOKEN for the stack's vault provider.
+        type: boolean
+        default: false
+      env:
+        description: Extra non-secret variables, one NAME=value per line.
+        type: string
+        default: ''
+      tofu-version:
+        type: string
+        default: 1.12.8
+      targets:
+        description: One -target address per line (empty plans everything).
+        type: string
+        default: ''
+      guard-allow:
+        description: plan_guard --allow prefixes, one per line (empty allows any address).
+        type: string
+        default: ''
+      guard-protect:
+        description: plan_guard --protect resource types, one per line (deleting them needs the allow-destroy PR label).
+        type: string
+        default: ''
+      pre-plan:
+        description: Script (path from the repo root) run in dir before init.
+        type: string
+        default: ''
+      post-apply:
+        description: Script (path from the repo root) run in dir after a successful apply.
+        type: string
+        default: ''
+      allow-outage:
+        description: End with a warning, not a failure, when a provider is down (for scheduled runs).
+        type: boolean
+        default: false
+      outage-grace-hours:
+        type: number
+        default: 6
+      drift-label:
+        type: string
+        default: infra-drift
+      platform-ref:
+        description: shared-platform ref for tools, actions and module sources.
+        type: string
+        default: main
+    outputs:
+      exitcode:
+        description: 0 (no changes), 2 (changes) or skip (a provider was down).
+        value: ${{ jobs.tofu.outputs.exitcode }}
+
+# No top-level permissions: in a called workflow they would cap every job
+# below the caller's grant. The jobs get exactly what the caller's job grants.
+
+jobs:
+  tofu:
+    name: ${{ inputs.mode }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No permissions block: a called job can't ask for more than its caller
+    # grants, so it inherits them (see the header).
+    outputs:
+      exitcode: ${{ steps.plan.outputs.exitcode }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.dir }}
+    env:
+      TF_IN_AUTOMATION: '1'
+      TF_INPUT: '0'
+      STACK: ${{ inputs.name != '' && inputs.name || inputs.dir }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      GH_REPO: ${{ github.repository }}
+      PLATFORM: ${{ github.workspace }}/.shared-platform
+    steps:
+      - name: Check the inputs
+        working-directory: .
+        env:
+          MODE: ${{ inputs.mode }}
+          REF: ${{ inputs.platform-ref }}
+        run: |
+          [[ "$MODE" =~ ^(plan|apply|drift)$ ]] || { echo "::error::mode must be plan, apply or drift"; exit 1; }
+          [[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::bad platform-ref"; exit 1; }
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: michael-attias123/shared-platform
+          ref: ${{ inputs.platform-ref }}
+          path: .shared-platform
+          persist-credentials: false
+      - uses: ./.shared-platform/.github/actions/setup-tools
+        with:
+          tofu-version: ${{ inputs.tofu-version }}
+      - name: Use shared-platform modules at ${{ inputs.platform-ref }}
+        if: inputs.platform-ref != 'main'
+        env:
+          REF: ${{ inputs.platform-ref }}
+        run: '"$PLATFORM/tools/platform_ref.sh" "$REF" .'
+      - name: Credentials from the shared Vault
+        if: inputs.vault-role != ''
+        uses: ./.shared-platform/.github/actions/vault-env
+        with:
+          addr: ${{ vars.VAULT_ADDR }}
+          role: ${{ inputs.vault-role }}
+          secrets: ${{ inputs.vault-secrets }}
+          export-token: ${{ inputs.vault-export-token }}
+      - name: Extra variables
+        if: inputs.env != ''
+        env:
+          EXTRA: ${{ inputs.env }}
+        run: |
+          while IFS= read -r line; do
+            [[ -z "${line// /}" ]] && continue
+            [[ "$line" =~ ^[A-Z_][A-Z0-9_]*=.*$ ]] || { echo "::error::bad env line (NAME=value)"; exit 1; }
+            echo "$line" >> "$GITHUB_ENV"
+          done <<<"$EXTRA"
+      - name: Pre-plan script
+        if: inputs.pre-plan != ''
+        env:
+          SCRIPT: ${{ inputs.pre-plan }}
+        run: '"$GITHUB_WORKSPACE/$SCRIPT"'
+      - name: tofu init
+        run: tofu init -input=false -no-color > "$RUNNER_TEMP/init.log" 2>&1 || { grep -A8 '^Error' "$RUNNER_TEMP/init.log"; exit 1; }
+      - id: plan
+        name: tofu plan
+        env:
+          TARGETS: ${{ inputs.targets }}
+          ALLOW_OUTAGE: ${{ inputs.allow-outage }}
+          OUTAGE_GRACE_HOURS: ${{ inputs.outage-grace-hours }}
+          WORKFLOW_FILE: ${{ github.workflow_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          WORKFLOW_FILE="$(basename "${WORKFLOW_FILE%@*}")" "$PLATFORM/tools/tofu_plan.sh" "$RUNNER_TEMP/tfplan"
+      # Marks a run that reached the providers: tofu_plan.sh looks for it, since
+      # a run skipped by an outage also ends as success.
+      - name: Reached the providers
+        if: steps.plan.outputs.exitcode != 'skip'
+        run: 'true'
+      - name: Guard
+        id: guard
+        if: inputs.mode != 'drift' && steps.plan.outputs.exitcode == '2'
+        env:
+          ALLOW: ${{ inputs.guard-allow }}
+          PROTECT: ${{ inputs.guard-protect }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          args=()
+          while IFS= read -r a; do [[ -n "${a// /}" ]] && args+=(--allow "${a// /}"); done <<<"$ALLOW"
+          while IFS= read -r p; do [[ -n "${p// /}" ]] && args+=(--protect "${p// /}"); done <<<"$PROTECT"
+          # The allow-destroy label: on the PR itself, or on the PR a pushed commit came from.
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            labels="$LABELS"
+          else
+            labels="$(gh api "repos/$GH_REPO/commits/$GITHUB_SHA/pulls" --jq '[.[0].labels[]?.name]' 2>/dev/null || echo '[]')"
+          fi
+          if jq -e 'index("allow-destroy")' <<<"${labels:-[]}" >/dev/null 2>&1; then
+            args+=(--allow-destroy)
+            echo "The allow-destroy label is set: protected resources may be deleted."
+          fi
+          tofu show -json "$RUNNER_TEMP/tfplan" > "$RUNNER_TEMP/plan.json"
+          python3 "$PLATFORM/tools/plan_guard.py" "${args[@]}" "$RUNNER_TEMP/plan.json"
+          rm -f "$RUNNER_TEMP/plan.json"
+      - name: Post the plan on the PR
+        if: ${{ !cancelled() && inputs.mode == 'plan' && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          OUTCOME: ${{ steps.plan.outputs.exitcode == 'skip' && 'skipped-outage' || steps.plan.outcome }}
+        run: '"$PLATFORM/tools/plan_comment.sh" "$RUNNER_TEMP/tfplan" "$OUTCOME"'
+      - name: tofu apply
+        if: inputs.mode == 'apply' && steps.plan.outputs.exitcode == '2'
+        run: |
+          if ! tofu apply -input=false -no-color -lock-timeout=5m "$RUNNER_TEMP/tfplan" > "$RUNNER_TEMP/apply.log" 2>&1; then
+            grep -A8 '^Error' "$RUNNER_TEMP/apply.log" || echo "The apply failed."
+            exit 1
+          fi
+          grep -m1 -E '^Apply complete' "$RUNNER_TEMP/apply.log" | tee -a "$GITHUB_STEP_SUMMARY" || true
+      # After every apply-mode run that reached the providers, changed or not:
+      # sync scripts are idempotent and a failed earlier sync gets another go.
+      - name: Post-apply script
+        if: inputs.mode == 'apply' && inputs.post-apply != '' && steps.plan.outputs.exitcode != 'skip'
+        env:
+          SCRIPT: ${{ inputs.post-apply }}
+          PLAN_CHANGED: ${{ steps.plan.outputs.exitcode == '2' }}
+        run: '"$GITHUB_WORKSPACE/$SCRIPT"'
+      - name: Drift issue
+        if: inputs.mode == 'drift'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABEL: ${{ inputs.drift-label }}
+          EXITCODE: ${{ steps.plan.outputs.exitcode }}
+        run: '"$PLATFORM/tools/drift_issue.sh" "$EXITCODE" "$RUNNER_TEMP/tfplan"'
+      - name: Remove the plan
+        if: always()
+        working-directory: .
+        run: rm -f "$RUNNER_TEMP/tfplan" "$RUNNER_TEMP/plan.json" "$RUNNER_TEMP/plan.log" "$RUNNER_TEMP/apply.log"

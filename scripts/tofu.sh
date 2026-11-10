@@ -14,7 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACKS=(vault-server vault-config github)
 STACK_NAME="${STACK:-vault-server}"
-STACK_DIR="$REPO_ROOT/$STACK_NAME"
+STACK_DIR="$REPO_ROOT/stacks/$STACK_NAME"
 PLAN_FILE="$STACK_DIR/.terraform/platform.tfplan"
 QOPS_DIR="${QOPS_CONFIG_DIR:-$HOME/.config/qops}"
 OCI_ENV="$QOPS_DIR/oci.env"
@@ -25,13 +25,16 @@ SSH_PUB="${PLATFORM_SSH_PUBLIC_KEY:-$HOME/.ssh/qops_oci.pub}"
 tf() { tofu -chdir="$STACK_DIR" "$@"; }
 
 offline_check() {
-  local s
+  local dir dirs=()
   tofu fmt -check -recursive "$REPO_ROOT"
-  for s in "${STACKS[@]}"; do
-    info "$s"
-    tofu -chdir="$REPO_ROOT/$s" init -backend=false -input=false >/dev/null
-    tofu -chdir="$REPO_ROOT/$s" validate
-    tofu -chdir="$REPO_ROOT/$s" test
+  # Every stack, then every shared module.
+  dirs=("${STACKS[@]/#/stacks/}")
+  while IFS= read -r dir; do dirs+=("$dir"); done < <(cd "$REPO_ROOT" && find modules -mindepth 1 -maxdepth 1 -type d | sort)
+  for dir in "${dirs[@]}"; do
+    info "$dir"
+    tofu -chdir="$REPO_ROOT/$dir" init -backend=false -input=false >/dev/null
+    tofu -chdir="$REPO_ROOT/$dir" validate
+    if [[ -d "$REPO_ROOT/$dir/tests" ]]; then tofu -chdir="$REPO_ROOT/$dir" test; fi
   done
 }
 
