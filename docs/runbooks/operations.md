@@ -70,14 +70,13 @@ couldn't resolve. Clients can pin the IP (`/etc/hosts`, or `--resolve` in curl) 
 domain later is one change: point a DNS A record at the reserved IP, put the name in the Caddyfile and `api_addr`
 on the VM, and update `VAULT_ADDR` in clients.
 
-<<<<<<< HEAD
 ## MFA codes rejected
 - Your phone's clock must be automatic (codes are valid for about 30 seconds either side).
 - Vault uses SHA1 TOTP on purpose: Google and Microsoft Authenticator ignore other algorithms and show wrong codes.
 - To start over with a new QR code (needs a token, e.g. `bash scripts/vault.sh with-root make vault-mfa-enroll`
   during setup, or your admin token): `RESET=1 make vault-mfa-enroll`. Delete the old entry in the app.
 - After 5 wrong codes in a row Vault refuses TOTP for that user for a while; wait a few minutes and try again.
-=======
+
 ## The OCI foundation (state bucket and budget)
 `stacks/oci-foundation` owns the versioned state bucket every stack's backend uses (this repo's and QuantumOps')
 and the tenancy's one budget: $1 a month with alerts at any spend and at $50, $150 and $250. QuantumOps'
@@ -99,4 +98,3 @@ make apply STACK=oci-foundation
 - **Credential files:** `scripts/tofu.sh` reads them from `~/.config/platform/state.env` and `tofu.env`, or falls
   back to QuantumOps' `~/.config/qops/oci.env` and `tofu.env` (same variable names). To move them, copy the two
   files there with mode 0600.
->>>>>>> origin/main
