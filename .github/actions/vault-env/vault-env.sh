@@ -95,7 +95,8 @@ while IFS= read -r raw; do
   name="$(sed -E 's/^.*\|[[:space:]]*//' <<<"$line")"
   read -r path key extra <<<"$left"
   [[ -n "$path" && -n "$key" && -z "${extra:-}" ]] || die "bad line (want '<path> <key> | <ENV>'): $line"
-  [[ "$name" =~ ^[A-Z_][A-Z0-9_]*$ ]] || die "bad variable name '$name'"
+  # Lower case too: OpenTofu's input variables are TF_VAR_<name>, with the variable's own spelling.
+  [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "bad variable name '$name'"
   [[ "$path" =~ ^[A-Za-z0-9_./-]+$ && "$path" != *..* ]] || die "bad path '$path'"
   if [[ -z "${cache[$path]+x}" ]]; then
     status="$(request GET "$addr/v1/$path" -H "X-Vault-Token: $token")"

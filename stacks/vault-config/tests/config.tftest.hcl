@@ -120,15 +120,24 @@ run "platform_ci_roles" {
     error_message = "The platform roles belong to this repo."
   }
   assert {
-    condition     = strcontains(vault_policy.platform_apply.policy, "path \"kv/data/*\" {\n  capabilities = [\"deny\"]")
+    condition     = strcontains(vault_policy.platform_apply.policy, "path \"kv/data/+/*\" {\n  capabilities = [\"deny\"]") && strcontains(vault_policy.platform_apply.policy, "path \"kv/data/+\" {\n  capabilities = [\"deny\"]")
     error_message = "platform-apply never reads projects' secrets."
+  }
+  assert {
+    # Vault ranks kv/data/* above kv/data/+/platform/* (fewer + segments), so that deny would win.
+    condition     = !strcontains(vault_policy.platform_apply.policy, "path \"kv/data/*\"") && !strcontains(vault_policy.platform_plan.policy, "path \"kv/data/*\"")
+    error_message = "A kv/data/* deny would also lock the platform out of kv/<project>/platform/*."
   }
   assert {
     condition     = strcontains(vault_policy.platform_apply.policy, "path \"auth/userpass/users/*\" {\n  capabilities = [\"deny\"]")
     error_message = "platform-apply can't set the admin's password."
   }
   assert {
-    condition     = !strcontains(vault_policy.platform_plan.policy, "create")
+    condition     = !strcontains(vault_policy.platform_plan.policy, "create") && !strcontains(vault_policy.platform_plan.policy, "update")
     error_message = "platform-plan only reads."
+  }
+  assert {
+    condition     = strcontains(vault_policy.platform_plan.policy, "path \"sys/mounts/auth/+/tune\" {\n  capabilities = [\"read\", \"sudo\"]")
+    error_message = "A plan reads every auth mount's tuning, which Vault only shows with sudo."
   }
 }
