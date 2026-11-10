@@ -21,6 +21,10 @@ run "hardened_defaults" {
     error_message = "The human login must have the strictest rate limit."
   }
   assert {
+    condition     = vault_identity_mfa_totp.admin.algorithm == "SHA1"
+    error_message = "TOTP must use SHA1: common authenticator apps ignore other algorithms and every code fails."
+  }
+  assert {
     condition     = length(vault_identity_mfa_login_enforcement.admin) == 0
     error_message = "MFA enforcement stays off until enrollment (enforce_admin_mfa)."
   }

@@ -6,7 +6,7 @@
 #   with-root CMD   run CMD (e.g. a make target) with the root token from vault-init.json (first setup only)
 #   admin           create/rotate the userpass "admin" user (hidden password prompt)
 #   login           vault login as admin (password + TOTP once MFA is enforced) -> ~/.vault-token
-#   mfa-enroll      show the TOTP QR code for the admin entity (once)
+#   mfa-enroll      show the TOTP QR code for the admin entity (once; RESET=1 replaces the old secret)
 #   revoke-root     revoke the root token and delete it from vault-init.json (keeps the recovery keys)
 #   snapshot-setup  install a periodic snapshot-only token on the VM and run one snapshot
 #   approle-secret  PROJECT=<name>: new role/secret ID -> ~/.config/platform/approle-<name>.env
@@ -139,7 +139,7 @@ cmd_admin() {
 }
 
 cmd_login() {
-  vault login -method=userpass username=admin >/dev/null
+  vault login -no-print -method=userpass username=admin
   ok "logged in; token in ~/.vault-token (expires in 1h)"
 }
 
@@ -148,9 +148,13 @@ cmd_mfa_enroll() {
   local method entity url
   method="$(config_output admin_totp_method_id)"
   entity="$(config_output admin_entity_id)"
+  if [[ "${RESET:-0}" == "1" ]]; then
+    vault write identity/mfa/method/totp/admin-destroy method_id="$method" entity_id="$entity" >/dev/null
+    warn "old TOTP secret deleted; delete the old entry in your authenticator app too"
+  fi
   url="$(vault write -format=json identity/mfa/method/totp/admin-generate method_id="$method" entity_id="$entity" |
     jq -r '.data.url // empty')"
-  [[ -n "$url" ]] || die "no TOTP secret returned (already enrolled? destroy it first: vault write identity/mfa/method/totp/admin-destroy ...)"
+  [[ -n "$url" ]] || die "no TOTP secret returned (already enrolled? RESET=1 make vault-mfa-enroll replaces it)"
   if have qrencode; then qrencode -t ANSIUTF8 "$url"; else printf '%s\n' "$url"; fi
   warn "scan this in your authenticator app, then clear the terminal. Next: set enforce_admin_mfa = true in vault-config"
 }
