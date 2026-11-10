@@ -81,6 +81,12 @@ on:
           stack's github provider.
         type: boolean
         default: false
+      github-app-repositories:
+        description: >-
+          With github-app: the repositories the token covers, comma-separated names of the caller's
+          owner. Empty: the caller's repo. `*`: every repository the app is installed on.
+        type: string
+        default: ''
       allow-outage:
         description: End with a warning, not a failure, when a provider is down (for scheduled runs).
         type: boolean
@@ -99,6 +105,9 @@ on:
       exitcode:
         description: 0 (no changes), 2 (changes) or skip (a provider was down).
         value: ${{ jobs.tofu.outputs.exitcode }}
+      summary:
+        description: The plan's one-line summary (counts only), such as `No changes.`
+        value: ${{ jobs.tofu.outputs.summary }}
 
 # No top-level permissions: in a called workflow they would cap every job
 # below the caller's grant. The jobs get exactly what the caller's job grants.
@@ -112,6 +121,7 @@ jobs:
     # grants, so it inherits them (see the header).
     outputs:
       exitcode: ${{ steps.plan.outputs.exitcode }}
+      summary: ${{ steps.plan.outputs.summary }}
     defaults:
       run:
         working-directory: ${{ inputs.dir }}
@@ -164,7 +174,10 @@ jobs:
           app-id: ${{ env.GITHUB_APP_ID }}
           private-key: ${{ env.GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
+          # No repositories with an owner: every repository of the installation.
+          repositories: >-
+            ${{ inputs.github-app-repositories == '' && github.event.repository.name
+            || (inputs.github-app-repositories != '*' && inputs.github-app-repositories || '') }}
       - name: Use the GitHub App token
         if: inputs.github-app
         env:

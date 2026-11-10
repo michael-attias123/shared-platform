@@ -82,3 +82,24 @@ def test_main_prints_outputs(tmp_path, capsys, monkeypatch):
 
 def test_main_bad_config(tmp_path):
     assert changes.main(["--config", str(tmp_path / "missing.toml")]) == 1
+
+
+def test_pull_request_compares_with_its_base(tmp_path, monkeypatch):
+    """With BASE a pull request runs only what it changes; the merge commit is HEAD."""
+    import subprocess
+
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                       cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a")
+    git("add", "."), git("commit", "-qm", "base")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
+    git("checkout", "-qb", "feature")
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "x.ts").write_text("x")
+    git("add", "."), git("commit", "-qm", "feature")
+    monkeypatch.chdir(tmp_path)
+    assert changes.changed_files("pull_request", "7/merge", "", base_sha=base) == ["web/x.ts"]
+    assert changes.changed_files("pull_request", "7/merge", "", base_sha="f" * 40) is None

@@ -3,7 +3,8 @@
 # the stack directory after `tofu init`.
 #   Usage: tofu_plan.sh PLANFILE
 #   Output (GITHUB_OUTPUT): exitcode=0 (no changes), 2 (changes) or skip
-#   (the provider was down; see below). Any other failure exits 1.
+#   (the provider was down; see below), and summary= the plan's one-line
+#   summary (counts only). Any other failure exits 1.
 #
 # The plan's text goes to $RUNNER_TEMP/plan.log; the log shows only its
 # summary line, or the errors. A plan that failed only on server-side errors
@@ -53,16 +54,20 @@ if [[ "$code" == 1 ]] && transient && [[ "${ALLOW_OUTAGE:-false}" == true ]]; th
     echo "::warning::A provider is unavailable (server errors only). Nothing changed; the next run retries. Last run that reached the providers: $last."
     echo "Skipped: a provider was unavailable. Last run that reached the providers: $last." >>"$summary_file"
     echo "exitcode=skip" >>"$GITHUB_OUTPUT"
+    echo "summary=Skipped: a provider was unavailable." >>"$GITHUB_OUTPUT"
     exit 0
   fi
   echo "No run has reached the providers for over ${OUTAGE_GRACE_HOURS:-6} hours (last: ${last:-none})."
 fi
 echo "exitcode=$code" >>"$GITHUB_OUTPUT"
 case "$code" in
-  0) echo "No changes." | tee -a "$summary_file" ;;
-  2) grep -m1 -E '^Plan: ' "$log" | tee -a "$summary_file" || echo "Only output changes." ;;
+  0) summary="No changes." ;;
+  2) summary="$(grep -m1 -E '^Plan: ' "$log" || echo "Only output changes.")" ;;
   *)
+    echo "summary=The plan failed." >>"$GITHUB_OUTPUT"
     grep -A8 '^Error' "$log" || echo "The plan failed."
     exit 1
     ;;
 esac
+echo "$summary" | tee -a "$summary_file"
+echo "summary=$summary" >>"$GITHUB_OUTPUT"

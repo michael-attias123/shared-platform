@@ -20,7 +20,7 @@ jobs:
       contents: read
     uses: ./.github/workflows/security.yml
     with:
-      shellcheck: 'scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/**/*.sh'
+      shellcheck: 'scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/**/*.sh stacks/*/scripts/*.sh'
       gitleaks-config: .github/linters/gitleaks.toml
       platform-ref: ${{ github.event.pull_request.head.sha || github.sha }}
 

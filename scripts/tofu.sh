@@ -4,7 +4,8 @@
 #
 #   plan   save a plan to review; nothing changes yet
 #   apply  apply the saved plan (and only that plan)
-#   check  offline, all stacks: fmt, validate, tests with mocked providers (same as CI)
+#   check  offline: fmt, validate, tests with mocked providers (same as CI). All stacks and modules, or
+#          only the directories given (check stacks/github modules/secrets-vault)
 #
 # Shared with QuantumOps: the state bucket + S3 key and the state passphrase. They are read from
 # ~/.config/platform/state.env and ~/.config/platform/tofu.env when those exist, else from QuantumOps'
@@ -31,10 +32,15 @@ tf() { tofu -chdir="$STACK_DIR" "$@"; }
 offline_check() {
   local dir dirs=()
   tofu fmt -check -recursive "$REPO_ROOT"
-  # Every stack, then every shared module.
-  dirs=("${STACKS[@]/#/stacks/}")
-  while IFS= read -r dir; do dirs+=("$dir"); done < <(cd "$REPO_ROOT" && find modules -mindepth 1 -maxdepth 1 -type d | sort)
+  if (($#)); then
+    dirs=("$@")
+  else
+    # Every stack, then every shared module.
+    dirs=("${STACKS[@]/#/stacks/}")
+    while IFS= read -r dir; do dirs+=("$dir"); done < <(cd "$REPO_ROOT" && find modules -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
   for dir in "${dirs[@]}"; do
+    [[ -d "$REPO_ROOT/$dir" ]] || die "no directory $dir"
     info "$dir"
     tofu -chdir="$REPO_ROOT/$dir" init -backend=false -input=false >/dev/null
     tofu -chdir="$REPO_ROOT/$dir" validate
@@ -112,7 +118,7 @@ need jq
 CMD="${1:-plan}"
 shift || true
 if [[ "$CMD" == "check" ]]; then
-  offline_check
+  offline_check "$@"
   exit
 fi
 

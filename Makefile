@@ -21,7 +21,7 @@ check: ## Offline: fmt, validate, mocked tests for all stacks (same as CI)
 	$(TOFU) check
 
 lint: ## shellcheck
-	shellcheck -x -P SCRIPTDIR scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/consumer/scripts/*.sh
+	shellcheck -x -P SCRIPTDIR scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/consumer/scripts/*.sh stacks/github/scripts/*.sh
 
 test-tools: ## The shared tools' tests (pytest; needs tools/requirements-telemetry.txt)
 	python3 -m pytest tools -q

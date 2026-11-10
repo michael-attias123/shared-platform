@@ -5,7 +5,7 @@ short-lived installation tokens, has no yearly expiry, and is limited to the rep
 
 | App | Installed on | Its id and key live in | Used for |
 |---|---|---|---|
-| `platform-bot` | every project repo and shared-platform | `kv/platform/github-app` | dispatching downstream checks, PR comments, the github stack's baselines (SP4) |
+| `platform-bot` | every project repo and shared-platform | `kv/platform/github-app` | starting the downstream checks and reading their results, starting a project's apply after a platform change, the github stack's baselines |
 | `<project>-bot` | that project's repo only | `kv/<project>/providers` (`github_app_id`, `github_app_private_key`) | the project's own OpenTofu GitHub provider (it replaces `GH_ADMIN_TOKEN`) |
 
 ## Creating one

@@ -1,7 +1,9 @@
-# The platform's own CI logins (wired into workflows in SP4, docs/ROADMAP.md). Both are bound to this repo:
+# The platform's own CI logins (.github/workflows/platform-apply.yml, drift.yml, downstream.yml). All are
+# bound to this repo:
 #   platform-plan   pull requests: plan the CI-applied stacks (vault-config, grafana, github). Reads only.
 #   platform-apply  main: apply them. Manages Vault's configuration, like the admin, but not projects' secrets.
-# Neither reads kv/<project>/* (the projects' own secrets): in Vault the most specific path rule wins, so the
+#   platform-drift  main: the scheduled drift check. The plan policy, so a schedule never holds write access.
+# None reads kv/<project>/* (the projects' own secrets): in Vault the most specific path rule wins, so the
 # kv/data/* deny below holds except where a longer path is allowed.
 
 locals {
@@ -103,6 +105,19 @@ resource "vault_jwt_auth_backend_role" "platform_apply" {
   bound_claims_type = "glob"
   bound_claims      = { repository = local.platform_repo, ref = "refs/heads/main" }
   token_policies    = [vault_policy.platform_apply.name]
+  token_ttl         = 1800
+  token_max_ttl     = 1800
+}
+
+resource "vault_jwt_auth_backend_role" "platform_drift" {
+  backend           = vault_jwt_auth_backend.github.path
+  role_name         = "platform-drift"
+  role_type         = "jwt"
+  user_claim        = "repository"
+  bound_audiences   = ["vault"]
+  bound_claims_type = "glob"
+  bound_claims      = { repository = local.platform_repo, ref = "refs/heads/main" }
+  token_policies    = [vault_policy.platform_plan.name]
   token_ttl         = 1800
   token_max_ttl     = 1800
 }

@@ -12,12 +12,14 @@ The areas are each repo's own, in a TOML file (default .platform/changes.toml):
 
 A branch is compared with where it left main (merge-base), so every push of
 a branch tests everything the branch changes, not only its last commit. main
-is compared with the previous main (the push's `before`). Anything unsure (a
-manual run, a pull_request event, a new or rewritten main, a failed git
-command) runs everything.
+is compared with the previous main (the push's `before`). A pull_request
+event is compared with where it left its base when BASE is set, and runs
+everything without it. Anything unsure (a manual run, a new or rewritten
+main, a failed git command) runs everything.
 
 Usage: changes.py [--config FILE] [--main REF]   (prints area=true|false lines)
-       env: GITHUB_EVENT_NAME, GITHUB_REF_NAME, BEFORE (github.event.before)
+       env: GITHUB_EVENT_NAME, GITHUB_REF_NAME, BEFORE (github.event.before),
+            BASE (github.event.pull_request.base.sha, pull requests only)
 """
 from __future__ import annotations
 
@@ -63,11 +65,14 @@ def _git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def changed_files(event: str, branch: str, before: str, main: str = "origin/main") -> list[str] | None:
+def changed_files(event: str, branch: str, before: str, main: str = "origin/main",
+                  base_sha: str = "") -> list[str] | None:
     try:
-        if event != "push":
+        if event == "pull_request" and base_sha:
+            base = _git("merge-base", base_sha, "HEAD")
+        elif event != "push":
             return None
-        if branch == main.removeprefix("origin/"):
+        elif branch == main.removeprefix("origin/"):
             if not before or set(before) == {"0"}:
                 return None
             _git("cat-file", "-e", f"{before}^{{commit}}")
@@ -90,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::error::changes: {exc}", file=sys.stderr)
         return 1
     files = changed_files(os.environ.get("GITHUB_EVENT_NAME", ""), os.environ.get("GITHUB_REF_NAME", ""),
-                          os.environ.get("BEFORE", ""), args.main)
+                          os.environ.get("BEFORE", ""), args.main, os.environ.get("BASE", ""))
     print(f"changed files: {'unknown, running everything' if files is None else len(files)}", file=sys.stderr)
     for area, run in areas_for(config, files).items():
         print(f"{area}={'true' if run else 'false'}")

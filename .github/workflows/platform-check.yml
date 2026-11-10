@@ -1,0 +1,58 @@
+name: platform-check
+run-name: platform-check ${{ inputs.request_id }}
+
+# This repo's own receiver of the downstream check, and the example for projects (docs/contract.md):
+# shared-platform's downstream.yml starts it with the commit to test. It plans examples/consumer with the
+# tools and modules at that commit and reports each stack's result in the `platform-check` artifact.
+# A project's receiver looks the same, with its own CI jobs and stacks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform_ref:
+        description: The shared-platform commit to test.
+        type: string
+        required: true
+      request_id:
+        description: Set by the caller; it finds this run by it (see run-name).
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  plan:
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: examples/consumer
+      name: example
+      mode: plan
+      platform-ref: ${{ inputs.platform_ref }}
+
+  report:
+    name: report
+    needs: plan
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: The stacks' results
+        env:
+          EXITCODE: ${{ needs.plan.outputs.exitcode }}
+          SUMMARY: ${{ needs.plan.outputs.summary }}
+        run: |
+          jq -n '{stacks: [{name: "example", exitcode: env.EXITCODE, summary: env.SUMMARY}]}' > result.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: platform-check
+          path: result.json
+          retention-days: 1
+      - name: Fail when a stack failed
+        env:
+          RESULT: ${{ needs.plan.result }}
+        run: '[[ "$RESULT" == success ]]'

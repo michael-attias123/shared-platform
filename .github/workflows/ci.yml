@@ -1,5 +1,10 @@
 name: ci
 
+# Offline checks of what a change touches (tools/changes.py with .platform/changes.toml): a job whose area
+# didn't change is skipped, and a skipped job counts as passed for the branch rules. `changes` is a required
+# check too, so a failed change detection blocks the merge itself. No credentials: the plans of the
+# CI-applied stacks are in platform-apply.yml.
+
 on:
   pull_request:
   push:
@@ -14,32 +19,87 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      oci_foundation: ${{ steps.diff.outputs.oci_foundation }}
+      vault_server: ${{ steps.diff.outputs.vault_server }}
+      vault_config: ${{ steps.diff.outputs.vault_config }}
+      github: ${{ steps.diff.outputs.github }}
+      modules: ${{ steps.diff.outputs.modules }}
+      shell: ${{ steps.diff.outputs.shell }}
+      tools: ${{ steps.diff.outputs.tools }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 tools/changes.py | tee -a "$GITHUB_OUTPUT"
+
   opentofu:
     name: opentofu
+    needs: changes
+    if: >-
+      needs.changes.outputs.oci_foundation == 'true' || needs.changes.outputs.vault_server == 'true' ||
+      needs.changes.outputs.vault_config == 'true' || needs.changes.outputs.github == 'true' ||
+      needs.changes.outputs.modules == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
-          tofu_version: 1.13.9
-          tofu_wrapper: false
-      - name: fmt, validate, tests with mocked providers (no credentials)
-        run: bash scripts/tofu.sh check
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+        with:
+          tofu-version: 1.13.9
+      - name: fmt, validate, tests with mocked providers (changed stacks and modules)
+        env:
+          OCI_FOUNDATION: ${{ needs.changes.outputs.oci_foundation }}
+          VAULT_SERVER: ${{ needs.changes.outputs.vault_server }}
+          VAULT_CONFIG: ${{ needs.changes.outputs.vault_config }}
+          GITHUB_STACK: ${{ needs.changes.outputs.github }}
+          MODULES: ${{ needs.changes.outputs.modules }}
+        run: |
+          dirs=()
+          [[ "$OCI_FOUNDATION" == true ]] && dirs+=(stacks/oci-foundation)
+          [[ "$VAULT_SERVER" == true ]] && dirs+=(stacks/vault-server)
+          [[ "$VAULT_CONFIG" == true ]] && dirs+=(stacks/vault-config)
+          [[ "$GITHUB_STACK" == true ]] && dirs+=(stacks/github)
+          if [[ "$MODULES" == true ]]; then
+            for d in modules/*/; do dirs+=("${d%/}"); done
+          fi
+          bash scripts/tofu.sh check "${dirs[@]}"
 
   shellcheck:
     name: shellcheck
+    needs: changes
+    if: needs.changes.outputs.shell == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - run: shellcheck -x -P SCRIPTDIR scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/consumer/scripts/*.sh
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck -x -P SCRIPTDIR scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/consumer/scripts/*.sh stacks/github/scripts/*.sh
 
   # The shared tools projects run through the reusable workflows.
   tools:
     name: tools
+    needs: changes
+    if: needs.changes.outputs.tools == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: pip install 'pytest>=8' 'PyYAML>=6,<7' -r tools/requirements-telemetry.txt
@@ -48,11 +108,13 @@ jobs:
   secrets:
     name: secret scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           GITLEAKS_CONFIG: .github/linters/gitleaks.toml
