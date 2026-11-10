@@ -32,7 +32,7 @@ resource "vault_identity_mfa_totp" "admin" {
   issuer                  = "shared-platform Vault"
   period                  = 30
   digits                  = 6
-  algorithm               = "SHA256"
+  algorithm               = "SHA1" # SHA256 is ignored by Google/Microsoft Authenticator (they compute SHA1 codes)
   max_validation_attempts = 5
 }
 

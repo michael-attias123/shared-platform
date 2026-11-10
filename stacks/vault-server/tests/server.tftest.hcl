@@ -19,6 +19,9 @@ variables {
 
 run "closed_until_initialized" {
   command = apply
+  variables {
+    expose_public = false
+  }
 
   assert {
     condition     = oci_core_instance.vault.shape == "VM.Standard.E2.1.Micro"

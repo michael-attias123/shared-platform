@@ -7,7 +7,7 @@ VAULT := bash scripts/vault.sh
 
 .PHONY: help tools check lint test-tools plan apply output \
 	vault-bootstrap-status vault-console vault-ssh vault-init vault-admin vault-login vault-mfa-enroll vault-revoke-root \
-	vault-snapshot-setup vault-approle-secret vault-health vault-seed github-app config-plan-root config-apply-root
+	vault-snapshot-setup vault-approle-secret vault-health vault-tls-retry vault-seed github-app config-plan-root config-apply-root
 
 help: ## Show targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
@@ -54,7 +54,7 @@ vault-ssh: ## Shell on the Vault VM via OCI Bastion (needs outbound TCP 22)
 vault-init: ## Initialize Vault (once); keys -> ~/.config/platform/vault-init.json
 	$(VAULT) init
 
-vault-admin: ## Create or rotate the admin user (hidden prompt)
+vault-admin: ## Create or rotate the admin user: random password -> clipboard (PROMPT=1 to type your own)
 	$(VAULT) admin
 
 vault-login: ## Log in as admin -> ~/.vault-token
@@ -80,3 +80,6 @@ github-app: ## Create a GitHub App, key into Vault: make github-app APP=platform
 
 vault-health: ## Public health check
 	$(VAULT) health
+
+vault-tls-retry: ## Restart Caddy so it requests the certificate now (after opening 443)
+	bash scripts/vm.sh exec 300 <<<'sudo systemctl restart caddy && sleep 30 && sudo journalctl -u caddy --since -40s --no-pager | grep -o "certificate obtained successfully" | head -n1'

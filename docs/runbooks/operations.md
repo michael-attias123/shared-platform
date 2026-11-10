@@ -1,5 +1,13 @@
 # Operations
 
+## Commands on the VM without SSH (OCI Run Command)
+`bash scripts/vm.sh exec <<<'command'` runs a command as `ocarun` (sudo allowed) through the OCI API (HTTPS).
+`make vault-bootstrap-status` and `make vault-console` work the same way. Limits:
+- Output is cut at about 1 KB.
+- OCI keeps command text and output, so never send or print secrets in clear. `vault.sh` encrypts them with
+  `age`.
+- The agent can take a few minutes to pick a command up.
+
 ## Shell on the VM (OCI Bastion)
 `make vault-ssh` opens a 3-hour Bastion session and SSHes through it with `~/.ssh/qops_oci`; it reuses the
 session while it's alive.
@@ -61,6 +69,13 @@ times out and the console shows `vault-1` *Stopped*. Fix: *Start* it in the cons
 couldn't resolve. Clients can pin the IP (`/etc/hosts`, or `--resolve` in curl) until it's back. Moving to your own
 domain later is one change: point a DNS A record at the reserved IP, put the name in the Caddyfile and `api_addr`
 on the VM, and update `VAULT_ADDR` in clients.
+
+## MFA codes rejected
+- Your phone's clock must be automatic (codes are valid for about 30 seconds either side).
+- Vault uses SHA1 TOTP on purpose: Google and Microsoft Authenticator ignore other algorithms and show wrong codes.
+- To start over with a new QR code (needs a token, e.g. `bash scripts/vault.sh with-root make vault-mfa-enroll`
+  during setup, or your admin token): `RESET=1 make vault-mfa-enroll`. Delete the old entry in the app.
+- After 5 wrong codes in a row Vault refuses TOTP for that user for a while; wait a few minutes and try again.
 
 ## The OCI foundation (state bucket and budget)
 `stacks/oci-foundation` owns the versioned state bucket every stack's backend uses (this repo's and QuantumOps')
