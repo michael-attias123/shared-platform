@@ -10,11 +10,13 @@ Admin ──OCI Bastion──> SSH (port 22 is never open to the internet)
 
 | Stack | What |
 |---|---|
+| [`stacks/oci-foundation/`](stacks/oci-foundation/) | The OpenTofu state bucket every stack uses and the tenancy's $1 budget with its alerts (taken over from QuantumOps' `oci.sh`). Laptop-only |
 | [`stacks/vault-server/`](stacks/vault-server/) | Compartment `platform`, VCN, `VM.Standard.E2.1.Micro` (Always Free), reserved IP (its [sslip.io](https://sslip.io) name needs no domain), KMS unseal key, snapshot bucket, Bastion |
 | [`stacks/vault-config/`](stacks/vault-config/) | Vault as code: KV store, audit log, rate limits, admin login with TOTP MFA, GitHub Actions / Kubernetes / AppRole auth, [one module call per project](stacks/vault-config/projects.tf) |
 | [`stacks/github/`](stacks/github/) | Branch protection for this repo and the `VAULT_ADDR` Actions variable |
 
-Everything runs through `make` (`make help`). OpenTofu state is in the same encrypted OCI bucket as QuantumOps.
+Everything runs through `make` (`make help`). OpenTofu state, this repo's and QuantumOps', lives in one versioned OCI
+bucket that `oci-foundation` owns; each stack encrypts its own state.
 
 It also holds the **building blocks every project's CI uses**. Projects reference them at `main`, with no
 version tags; each change is tested in this repo before it merges ([docs/contract.md](docs/contract.md)):
