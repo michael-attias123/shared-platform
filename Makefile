@@ -5,19 +5,16 @@ ARGS ?=
 TOFU := STACK=$(STACK) bash scripts/tofu.sh
 VAULT := bash scripts/vault.sh
 
-.PHONY: help tools cloudflare-login check lint plan apply output \
-	vault-bootstrap-status vault-ssh vault-init vault-admin vault-login vault-mfa-enroll vault-revoke-root \
+.PHONY: help tools check lint plan apply output \
+	vault-bootstrap-status vault-console vault-ssh vault-init vault-admin vault-login vault-mfa-enroll vault-revoke-root \
 	vault-snapshot-setup vault-approle-secret vault-health config-plan-root config-apply-root
 
 help: ## Show targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
 
 # --- setup -----------------------------------------------------------------------------------------------------------
-tools: ## Install the Vault CLI (other tools: QuantumOps make tools-admin)
+tools: ## Install the Vault CLI and age (other tools: QuantumOps make tools-admin)
 	bash scripts/setup.sh tools
-
-cloudflare-login: ## Save a Cloudflare API token (hidden prompt)
-	bash scripts/setup.sh cloudflare-login
 
 # --- infrastructure as code ------------------------------------------------------------------------------------------
 check: ## Offline: fmt, validate, mocked tests for all stacks (same as CI)
@@ -42,10 +39,13 @@ config-apply-root: ## First setup only: apply that plan with the root token
 	$(VAULT) with-root env STACK=vault-config bash scripts/tofu.sh apply
 
 # --- operating Vault -------------------------------------------------------------------------------------------------
-vault-bootstrap-status: ## First-boot progress on the VM (via Bastion)
-	bash scripts/bastion.sh status
+vault-bootstrap-status: ## First-boot progress on the VM (OCI Run Command, works behind proxies)
+	bash scripts/vm.sh status
 
-vault-ssh: ## Shell on the Vault VM (via Bastion)
+vault-console: ## Serial console tail of the VM (OCI API; works before the agent is up)
+	bash scripts/vm.sh console
+
+vault-ssh: ## Shell on the Vault VM via OCI Bastion (needs outbound TCP 22)
 	bash scripts/bastion.sh ssh
 
 vault-init: ## Initialize Vault (once); keys -> ~/.config/platform/vault-init.json

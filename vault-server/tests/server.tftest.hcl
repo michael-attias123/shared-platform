@@ -1,10 +1,9 @@
 # Offline checks with mocked providers (CI; no credentials).
 
-mock_provider "oci" {}
-mock_provider "cloudflare" {
-  mock_data "cloudflare_zone" {
+mock_provider "oci" {
+  mock_resource "oci_core_public_ip" {
     defaults = {
-      zone_id = "0123456789abcdef0123456789abcdef"
+      ip_address = "203.0.113.7"
     }
   }
 }
@@ -14,8 +13,6 @@ variables {
   tenancy_ocid        = "ocid1.tenancy.oc1..test"
   state_passphrase    = "test-passphrase-not-secret"
   ssh_public_key      = "ssh-ed25519 AAAATEST admin"
-  vault_hostname      = "vault.example.com"
-  cloudflare_zone     = "example.com"
   image_ocid          = "ocid1.image.oc1..test"
   availability_domain = "Abcd:TEST-REGION-1-AD-1"
 }
@@ -39,16 +36,24 @@ run "closed_until_initialized" {
     error_message = "The VCN default security list must be empty."
   }
   assert {
-    condition     = cloudflare_dns_record.vault.proxied == false && cloudflare_dns_record.vault.type == "A"
-    error_message = "The DNS record must be DNS-only, so TLS ends on the VM."
+    condition     = output.vault_addr == "https://vault.203-0-113-7.sslip.io"
+    error_message = "The public name must be derived from the reserved IP (sslip.io)."
+  }
+  assert {
+    condition     = oci_core_public_ip.vault.lifetime == "RESERVED"
+    error_message = "The public IP must be reserved, so the name never changes."
   }
   assert {
     condition     = strcontains(join("\n", oci_identity_policy.vault.statements), "target.key.id = '${oci_kms_key.seal.id}'")
     error_message = "The VM may use only its own unseal key."
   }
   assert {
+    condition     = strcontains(join("\n", oci_identity_policy.vault.statements), "instance-agent-command-execution-family in compartment platform where request.instance.id = target.instance.id")
+    error_message = "Run Command (admin access through HTTPS) must be allowed for the VM itself only."
+  }
+  assert {
     condition = alltrue([
-      for s in ["seal \"ocikms\"", "address                          = \"127.0.0.1:8200\"", "vault=2.2.1-1", "disable_http_challenge"] :
+      for s in ["seal \"ocikms\"", "address                          = \"127.0.0.1:8200\"", "vault=2.2.1-1", "disable_http_challenge", "vault.$${ip//./-}.sslip.io", "ocarun ALL=(ALL) NOPASSWD:ALL", "  - age"] :
       strcontains(base64decode(oci_core_instance.vault.metadata["user_data"]), s)
     ])
     error_message = "cloud-init must pin Vault, bind it to localhost, auto-unseal with OCI KMS and use TLS-ALPN in Caddy."

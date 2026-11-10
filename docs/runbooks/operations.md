@@ -53,6 +53,11 @@ times out and the console shows `vault-1` *Stopped*. Fix: *Start* it in the cons
 |---|---|
 | Admin password | `make vault-admin` (as admin) |
 | Admin TOTP | `vault write identity/mfa/method/totp/admin-destroy method_id=... entity_id=...`, then `make vault-mfa-enroll` |
-| Cloudflare token | delete `~/.config/platform/cloudflare.env`, `make cloudflare-login` |
 | AppRole secret ID | `make vault-approle-secret PROJECT=<name>` (valid 90 days) |
 | Lost root/admin | `vault operator generate-root` with 3 of the 5 recovery keys |
+
+## The sslip.io name
+`vault.<a-b-c-d>.sslip.io` resolves through the public sslip.io DNS service. If sslip.io were ever down, names
+couldn't resolve. Clients can pin the IP (`/etc/hosts`, or `--resolve` in curl) until it's back. Moving to your own
+domain later is one change: point a DNS A record at the reserved IP, put the name in the Caddyfile and `api_addr`
+on the VM, and update `VAULT_ADDR` in clients.

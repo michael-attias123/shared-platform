@@ -7,7 +7,7 @@
 #   check  offline, all stacks: fmt, validate, tests with mocked providers (same as CI)
 #
 # Shared with QuantumOps: the state bucket + S3 key (~/.config/qops/oci.env) and the state passphrase
-# (~/.config/qops/tofu.env). Platform-only: ~/.config/platform/cloudflare.env, and your Vault token.
+# (~/.config/qops/tofu.env). Platform-only: your Vault token (make vault-login).
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -19,7 +19,6 @@ PLAN_FILE="$STACK_DIR/.terraform/platform.tfplan"
 QOPS_DIR="${QOPS_CONFIG_DIR:-$HOME/.config/qops}"
 OCI_ENV="$QOPS_DIR/oci.env"
 TOFU_ENV="$QOPS_DIR/tofu.env"
-CF_ENV="$PLATFORM_CONFIG_DIR/cloudflare.env"
 BACKEND_FILE="$PLATFORM_CONFIG_DIR/backend.hcl"
 SSH_PUB="${PLATFORM_SSH_PUBLIC_KEY:-$HOME/.ssh/qops_oci.pub}"
 
@@ -65,12 +64,7 @@ EOF
 load_stack() {
   case "$STACK_NAME" in
     vault-server)
-      [[ -f "$CF_ENV" ]] || die "missing $CF_ENV. Run: make cloudflare-login"
       [[ -f "$SSH_PUB" ]] || die "missing $SSH_PUB (admin SSH key)"
-      set -a
-      # shellcheck disable=SC1090
-      source "$CF_ENV"
-      set +a
       export TF_VAR_region="$QOPS_OCI_REGION" TF_VAR_oci_profile="$OCI_CLI_PROFILE"
       TF_VAR_tenancy_ocid="$(oci_cfg tenancy)"
       TF_VAR_ssh_public_key="$(cat "$SSH_PUB")"
@@ -120,6 +114,8 @@ case "$CMD" in
     ensure_init
     tf apply -input=false "$PLAN_FILE"
     rm -f "$PLAN_FILE"
+    # The public name follows the reserved IP; refresh the cached address after server changes.
+    if [[ "$STACK_NAME" == "vault-server" ]]; then rm -f "$PLATFORM_CONFIG_DIR/vault_addr"; fi
     ;;
   *)
     ensure_init

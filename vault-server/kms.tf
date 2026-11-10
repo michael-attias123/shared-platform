@@ -35,9 +35,21 @@ resource "oci_objectstorage_bucket" "snapshots" {
   freeform_tags  = local.tags
 }
 
+# Object Storage's own service principal must be allowed to delete objects before a lifecycle rule can be set.
+resource "oci_identity_policy" "objectstorage_lifecycle" {
+  compartment_id = oci_identity_compartment.platform.id
+  name           = "platform-objectstorage-lifecycle"
+  description    = "Let Object Storage apply lifecycle rules (snapshot expiry) in this compartment"
+  freeform_tags  = local.tags
+  statements = [
+    "Allow service objectstorage-${var.region} to manage object-family in compartment ${oci_identity_compartment.platform.name}",
+  ]
+}
+
 resource "oci_objectstorage_object_lifecycle_policy" "snapshots" {
-  namespace = data.oci_objectstorage_namespace.ns.namespace
-  bucket    = oci_objectstorage_bucket.snapshots.name
+  namespace  = data.oci_objectstorage_namespace.ns.namespace
+  bucket     = oci_objectstorage_bucket.snapshots.name
+  depends_on = [oci_identity_policy.objectstorage_lifecycle]
 
   rules {
     name        = "expire-old-snapshots"
@@ -65,6 +77,8 @@ resource "oci_identity_policy" "vault" {
   statements = [
     "Allow dynamic-group ${oci_identity_dynamic_group.vault.name} to use vaults in compartment ${oci_identity_compartment.platform.name}",
     "Allow dynamic-group ${oci_identity_dynamic_group.vault.name} to use keys in compartment ${oci_identity_compartment.platform.name} where target.key.id = '${oci_kms_key.seal.id}'",
+    # Run Command: the agent on the VM fetches commands created by an admin, and returns their output.
+    "Allow dynamic-group ${oci_identity_dynamic_group.vault.name} to use instance-agent-command-execution-family in compartment ${oci_identity_compartment.platform.name} where request.instance.id = target.instance.id",
     "Allow dynamic-group ${oci_identity_dynamic_group.vault.name} to manage objects in compartment ${oci_identity_compartment.platform.name} where all {target.bucket.name = '${oci_objectstorage_bucket.snapshots.name}', any {request.permission = 'OBJECT_CREATE', request.permission = 'OBJECT_INSPECT'}}",
   ]
 }

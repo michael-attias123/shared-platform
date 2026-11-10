@@ -136,10 +136,15 @@ PLATFORM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLATFORM_CONFIG_DIR="${PLATFORM_CONFIG_DIR:-$HOME/.config/platform}"
 export PATH="$HOME/.local/bin:$PATH"
 
-# https://<vault_hostname> from vault-server/settings.auto.tfvars (the public, committed setting).
+# https://vault.<a-b-c-d>.sslip.io, from the vault-server stack output (cached in ~/.config/platform/vault_addr).
 vault_addr_from_settings() {
-  local host
-  host="$(sed -n "s/^vault_hostname *= *\"\(.*\)\"/\1/p" "$PLATFORM_ROOT/vault-server/settings.auto.tfvars")"
-  [[ -n "$host" && "$host" != "vault.example.com" ]] || die "set vault_hostname in vault-server/settings.auto.tfvars first"
-  printf "https://%s\n" "$host"
+  local cache="$PLATFORM_CONFIG_DIR/vault_addr" addr
+  if [[ -s "$cache" ]]; then
+    cat "$cache"
+    return
+  fi
+  addr="$(STACK=vault-server bash "$PLATFORM_ROOT/scripts/tofu.sh" output -raw vault_addr 2>/dev/null)" ||
+    die "no Vault address yet. Apply the server first: make plan STACK=vault-server && make apply STACK=vault-server"
+  mkdir -p "$PLATFORM_CONFIG_DIR"
+  printf '%s\n' "$addr" | tee "$cache"
 }

@@ -21,7 +21,7 @@ resource "oci_core_instance" "vault" {
     ssh_authorized_keys = trimspace(var.ssh_public_key)
     user_data = base64encode(templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
       vault_version       = var.vault_version
-      vault_hostname      = var.vault_hostname
+      hostname_prefix     = var.hostname_prefix
       seal_key_id         = oci_kms_key.seal.id
       crypto_endpoint     = oci_kms_vault.platform.crypto_endpoint
       management_endpoint = oci_kms_vault.platform.management_endpoint
@@ -64,7 +64,7 @@ locals {
   vault_private_ip_id = try(data.oci_core_private_ips.vault.private_ips[0].id, null)
 }
 
-# A reserved IP survives instance rebuilds, so the DNS record and clients never change.
+# A reserved IP survives instance rebuilds, so the sslip.io name (derived from it) and clients never change.
 resource "oci_core_public_ip" "vault" {
   compartment_id = oci_identity_compartment.platform.id
   lifetime       = "RESERVED"

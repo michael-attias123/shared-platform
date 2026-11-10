@@ -32,19 +32,15 @@ variable "ssh_public_key" {
   type        = string
 }
 
-variable "vault_hostname" {
-  description = "Public name of Vault, e.g. vault.example.com. Must be inside cloudflare_zone."
+variable "hostname_prefix" {
+  description = "Vault's public name is <prefix>.<public-ip-with-dashes>.sslip.io (free wildcard DNS; no domain needed)."
   type        = string
+  default     = "vault"
 
   validation {
-    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.vault_hostname))
-    error_message = "vault_hostname must be a lowercase DNS name like vault.example.com."
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.hostname_prefix))
+    error_message = "hostname_prefix must be one lowercase DNS label."
   }
-}
-
-variable "cloudflare_zone" {
-  description = "Cloudflare zone (your domain) that holds vault_hostname, e.g. example.com."
-  type        = string
 }
 
 variable "expose_public" {

@@ -1,6 +1,4 @@
-# Public settings (no secrets). Set your domain before the first plan.
-vault_hostname  = "vault.example.com"
-cloudflare_zone = "example.com"
+# Public settings (no secrets).
 
-# Flip to true only after `make vault-init` (see docs/runbooks/vault-init.md).
+# Flip to true only after `make vault-init` (see docs/runbooks/setup.md): an uninitialized Vault must never be public.
 expose_public = false

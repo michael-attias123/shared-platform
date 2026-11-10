@@ -2,7 +2,7 @@
 # Vault admin tasks. Secrets go to ~/.config/platform (0600) or straight into Vault; none is echoed by these scripts
 # except the TOTP enrollment QR code, which is meant for your eyes (scan it, then clear the terminal).
 #
-#   init            vault operator init over Bastion (refuses if already initialized) -> vault-init.json
+#   init            vault operator init via OCI Run Command (refuses if already initialized) -> vault-init.json
 #   with-root CMD   run CMD (e.g. a make target) with the root token from vault-init.json (first setup only)
 #   admin           create/rotate the userpass "admin" user (hidden password prompt)
 #   login           vault login as admin (password + TOTP once MFA is enforced) -> ~/.vault-token
@@ -15,8 +15,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 INIT_FILE="$PLATFORM_CONFIG_DIR/vault-init.json"
-BASTION=(bash "$PLATFORM_ROOT/scripts/bastion.sh" ssh)
-LOCAL_VAULT='VAULT_ADDR=http://127.0.0.1:8200 vault'
+SSH_KEY="${PLATFORM_SSH_KEY:-$HOME/.ssh/qops_oci}"
+# Commands on the VM go through OCI Run Command (HTTPS only). OCI stores command text and output, so secrets
+# travel only age-encrypted: to your SSH key on the way back, to the VM's SSH host key on the way in.
+vm_exec() { bash "$PLATFORM_ROOT/scripts/vm.sh" exec "$@"; }
 
 need jq
 need vault
@@ -26,19 +28,31 @@ export VAULT_ADDR
 config_output() { STACK=vault-config bash "$PLATFORM_ROOT/scripts/tofu.sh" output -raw "$1"; }
 
 cmd_init() {
-  local status
-  status="$("${BASTION[@]}" "$LOCAL_VAULT status -format=json" || true)"
-  [[ -n "$status" ]] || die "can't reach Vault on the VM. Check: make vault-bootstrap-status"
-  if [[ "$(jq -r .initialized <<<"$status")" == "true" ]]; then
-    ok "Vault is already initialized (seal: $(jq -r .type <<<"$status"), sealed: $(jq -r .sealed <<<"$status"))"
+  need age
+  [[ -f "$SSH_KEY.pub" ]] || die "missing $SSH_KEY.pub"
+  local out recipient
+  recipient="$(cat "$SSH_KEY.pub")"
+  info "initializing Vault on the VM (auto-unseal: 5 recovery keys, threshold 3)"
+  out="$(vm_exec 300 <<EOF
+set -euo pipefail
+export VAULT_ADDR=http://127.0.0.1:8200
+if [ "\$(vault status -format=json 2>/dev/null | jq -r .initialized)" = "true" ]; then
+  echo ALREADY_INITIALIZED
+  vault status -format=json | jq -c '{initialized, sealed, type}' || true
+  exit 0
+fi
+vault operator init -format=json -recovery-shares=5 -recovery-threshold=3 | age -a -r '$recipient'
+EOF
+)"
+  if grep -q ALREADY_INITIALIZED <<<"$out"; then
+    ok "Vault is already initialized: $(tail -n1 <<<"$out")"
     return
   fi
-  info "initializing Vault (auto-unseal: 5 recovery keys, threshold 3) -> $INIT_FILE"
-  "${BASTION[@]}" "$LOCAL_VAULT operator init -format=json -recovery-shares=5 -recovery-threshold=3" |
-    write_secret_file "$INIT_FILE"
+  grep -q 'BEGIN AGE ENCRYPTED FILE' <<<"$out" || die "unexpected output from the VM: $(head -c 300 <<<"$out")"
+  sed -n '/BEGIN AGE ENCRYPTED FILE/,/END AGE ENCRYPTED FILE/p' <<<"$out" | age -d -i "$SSH_KEY" | write_secret_file "$INIT_FILE"
   jq -e '.root_token and (.recovery_keys_b64 | length == 5)' "$INIT_FILE" >/dev/null || die "init output looks wrong; see $INIT_FILE"
-  ok "initialized. NOW copy $INIT_FILE into your password manager (recovery keys + root token)."
-  "${BASTION[@]}" "$LOCAL_VAULT status" | grep -E 'Initialized|Sealed|Seal Type' || true
+  ok "initialized -> $INIT_FILE. NOW copy it into your password manager (recovery keys + root token)."
+  vm_exec 120 <<<'VAULT_ADDR=http://127.0.0.1:8200 vault status | grep -E "Initialized|Sealed|Seal Type" || true'
 }
 
 root_token() {
@@ -98,10 +112,20 @@ cmd_revoke_root() {
 }
 
 cmd_snapshot_setup() {
+  need age
   token_or_root
-  vault token create -policy=snapshot -period=768h -orphan -display-name=vault-snapshot -field=token |
-    "${BASTION[@]}" 'sudo install -m 0600 -o root -g root /dev/stdin /etc/vault.d/snapshot.token'
-  "${BASTION[@]}" 'sudo systemctl start vault-snapshot.service && sudo journalctl -u vault-snapshot.service -n 3 --no-pager'
+  local host_key sealed
+  host_key="$(vm_exec 120 <<<'cat /etc/ssh/ssh_host_ed25519_key.pub' | grep '^ssh-ed25519 ' | head -n1)"
+  [[ -n "$host_key" ]] || die "couldn't read the VM's SSH host key"
+  # Encrypted to the VM's host key, so the token never appears in clear in OCI's Run Command records.
+  sealed="$(vault token create -policy=snapshot -period=768h -orphan -display-name=vault-snapshot -field=token |
+    age -a -r "$host_key")"
+  vm_exec 600 <<EOF
+set -euo pipefail
+printf '%s\n' '$sealed' | sudo age -d -i /etc/ssh/ssh_host_ed25519_key | sudo install -m 0600 -o root -g root /dev/stdin /etc/vault.d/snapshot.token
+sudo systemctl start vault-snapshot.service
+sudo journalctl -u vault-snapshot.service -n 3 --no-pager
+EOF
   ok "snapshot token installed; the timer runs daily at ~02:30 UTC"
 }
 

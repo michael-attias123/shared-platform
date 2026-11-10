@@ -6,14 +6,14 @@ and passphrase (`~/.config/qops/`), and the admin SSH key `~/.ssh/qops_oci`.
 ## 1. Before the first plan
 ```bash
 make tools              # Vault CLI into ~/.local/bin
-make cloudflare-login   # token: "Edit zone DNS" template, limited to your domain
 ```
-Set your domain in [`vault-server/settings.auto.tfvars`](../../vault-server/settings.auto.tfvars)
-(`vault_hostname`, `cloudflare_zone`) in a PR. Leave `expose_public = false`.
+There's no domain to set up. Vault's name is `vault.<public-ip-with-dashes>.sslip.io`. [sslip.io](https://sslip.io)
+is free public DNS that answers such names with the embedded IP. The IP is reserved, so the name never changes.
+Leave `expose_public = false` in [`vault-server/settings.auto.tfvars`](../../vault-server/settings.auto.tfvars).
 
 ## 2. Server (not public yet)
 ```bash
-make plan STACK=vault-server     # review: E2.1.Micro, only SSH-from-VCN ingress, DNS record proxied=false
+make plan STACK=vault-server     # review: E2.1.Micro, only SSH-from-VCN ingress, reserved IP
 make apply STACK=vault-server
 make vault-bootstrap-status      # via Bastion; wait for "bootstrap done" (~5-10 min)
 ```

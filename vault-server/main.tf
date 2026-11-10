@@ -3,9 +3,6 @@ provider "oci" {
   config_file_profile = var.oci_profile
 }
 
-# CLOUDFLARE_API_TOKEN (DNS edit on one zone) comes from ~/.config/platform/cloudflare.env.
-provider "cloudflare" {}
-
 locals {
   tags = {
     "platform-managed-by" = "opentofu"

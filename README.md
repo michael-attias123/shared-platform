@@ -1,7 +1,7 @@
 # shared-platform
 
 Shared services for all of my projects, on Oracle Cloud Always Free ($0). Today that's one service:
-**a public HashiCorp Vault** at `https://<vault_hostname>`.
+**a public HashiCorp Vault** at `https://vault.<public-ip-with-dashes>.sslip.io` (`make output STACK=vault-server`).
 
 ```
 Internet ──443──> Caddy (Let's Encrypt) ──> Vault 127.0.0.1:8200 ──> raft storage, auto-unsealed by OCI KMS
@@ -10,7 +10,7 @@ Admin ──OCI Bastion──> SSH (port 22 is never open to the internet)
 
 | Stack | What |
 |---|---|
-| [`vault-server/`](vault-server/) | Compartment `platform`, VCN, `VM.Standard.E2.1.Micro` (Always Free), reserved IP, Cloudflare DNS record, KMS unseal key, snapshot bucket, Bastion |
+| [`vault-server/`](vault-server/) | Compartment `platform`, VCN, `VM.Standard.E2.1.Micro` (Always Free), reserved IP (its [sslip.io](https://sslip.io) name needs no domain), KMS unseal key, snapshot bucket, Bastion |
 | [`vault-config/`](vault-config/) | Vault as code: KV store, audit log, rate limits, admin login with TOTP MFA, GitHub Actions / Kubernetes / AppRole auth, [one module call per project](vault-config/projects.tf) |
 | [`github/`](github/) | Branch protection for this repo and the `VAULT_ADDR` Actions variable |
 

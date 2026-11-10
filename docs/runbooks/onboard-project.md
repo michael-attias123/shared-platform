@@ -44,7 +44,7 @@ metadata: { name: vault }
 spec:
   provider:
     vault:
-      server: https://<vault_hostname>
+      server: https://vault.<ip-with-dashes>.sslip.io
       path: kv
       version: v2
       auth:
@@ -61,7 +61,7 @@ permissions: { id-token: write, contents: read }
 steps:
   - uses: hashicorp/vault-action@v3
     with:
-      url: https://<vault_hostname>
+      url: https://vault.<ip-with-dashes>.sslip.io
       method: jwt
       path: jwt-github
       role: myapp-michael-attias123-myapp            # <project>-<owner>-<repo>

@@ -10,14 +10,22 @@ packages:
   - python3-venv
   - unattended-upgrades
   - iptables-persistent
+  - age
 
 write_files:
+  # Admin access without SSH: OCI "Run Command" (HTTPS API, works behind proxies that block port 22) runs as the
+  # ocarun user. Only tenancy admins can create commands (IAM), so it may use sudo, as Oracle's docs describe.
+  - path: /etc/sudoers.d/90-oci-run-command
+    permissions: "0440"
+    content: |
+      ocarun ALL=(ALL) NOPASSWD:ALL
+
   - path: /etc/vault.d/vault.hcl
     permissions: "0640"
     content: |
       ui            = true
       disable_mlock = true   # recommended with integrated (raft) storage
-      api_addr      = "https://${vault_hostname}"
+      api_addr      = "https://__VAULT_HOST__"
       cluster_addr  = "https://127.0.0.1:8201"
 
       storage "raft" {
@@ -47,7 +55,7 @@ write_files:
       {
         auto_https disable_redirects
       }
-      ${vault_hostname} {
+      __VAULT_HOST__ {
         tls {
           issuer acme {
             disable_http_challenge
@@ -117,8 +125,21 @@ write_files:
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
-      exec >>/var/log/platform-bootstrap.log 2>&1
+      # Log to a file and to the serial console (readable over the OCI API: make vault-console).
+      exec > >(tee -a /var/log/platform-bootstrap.log >/dev/console) 2>&1
       echo "== $(date -Is) bootstrap start"
+
+      # The reserved public IP is attached right after the VM is created; until then there's no internet.
+      # Wait for it, then derive the public name the same way OpenTofu does: <prefix>.<a-b-c-d>.sslip.io
+      for _ in $(seq 1 120); do
+        ip="$(curl -fsS --max-time 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]')" && [[ -n "$ip" ]] && break
+        sleep 5
+      done
+      [[ -n "$${ip:-}" ]] || { echo "no internet/public IP after 10 minutes"; exit 1; }
+      host="${hostname_prefix}.$${ip//./-}.sslip.io"
+      echo "public name: $host"
+      sed -i "s/__VAULT_HOST__/$host/" /etc/vault.d/vault.hcl /etc/caddy/Caddyfile
+      echo "$host" > /etc/vault.d/public-hostname
 
       # 1 GB of RAM: add swap so package installs and snapshots never OOM.
       if [[ ! -f /swapfile ]]; then

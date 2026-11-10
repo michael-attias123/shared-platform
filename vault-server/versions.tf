@@ -6,10 +6,6 @@ terraform {
       source  = "oracle/oci"
       version = "~> 9.12"
     }
-    cloudflare = {
-      source  = "cloudflare/cloudflare"
-      version = "~> 5.28"
-    }
   }
 
   # Same OCI bucket as QuantumOps (bucket/region/endpoint from scripts/tofu.sh); only the key differs.
