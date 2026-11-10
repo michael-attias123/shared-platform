@@ -7,4 +7,14 @@ set -euo pipefail
   exit 1
 }
 [[ "$(tofu output -raw greeting)" == "hello from the example consumer" ]]
+# The saved plan, as JSON, for hooks that decide from it (e.g. house-manager's Pages rebuild).
+[[ -s "${PLAN_JSON:-}" ]] || {
+  echo "::error::post-apply: PLAN_JSON is not set or empty"
+  exit 1
+}
+jq -e '.resource_changes[] | select(.address == "terraform_data.example")' "$PLAN_JSON" >/dev/null
+[[ -n "${GH_TOKEN:-}" ]] || {
+  echo "::error::post-apply: GH_TOKEN is not set"
+  exit 1
+}
 echo "post-apply: ran after the apply"
