@@ -6,7 +6,7 @@
 #   with-root CMD   run CMD (e.g. a make target) with the root token from vault-init.json (first setup only)
 #   admin           create/rotate the userpass "admin" user (hidden password prompt)
 #   login           vault login as admin (password + TOTP once MFA is enforced) -> ~/.vault-token
-#   mfa-enroll      show the TOTP QR code for the admin entity (once)
+#   mfa-enroll      show the TOTP QR code for the admin entity (once; RESET=1 replaces the old secret)
 #   revoke-root     revoke the root token and delete it from vault-init.json (keeps the recovery keys)
 #   snapshot-setup  install a periodic snapshot-only token on the VM and run one snapshot
 #   approle-secret  PROJECT=<name>: new role/secret ID -> ~/.config/platform/approle-<name>.env
@@ -33,26 +33,49 @@ cmd_init() {
   local out recipient
   recipient="$(cat "$SSH_KEY.pub")"
   info "initializing Vault on the VM (auto-unseal: 5 recovery keys, threshold 3)"
+  # Run Command returns at most ~1 KB of text, so the encrypted result is kept in a root-only file on the VM
+  # (/root/vault-init.age) and fetched in small chunks; the file is deleted only after it decrypts here.
   out="$(vm_exec 300 <<EOF
 set -euo pipefail
 export VAULT_ADDR=http://127.0.0.1:8200
+if sudo test -s /root/vault-init.age; then echo PENDING_FETCH; exit 0; fi
 if [ "\$(vault status -format=json 2>/dev/null | jq -r .initialized)" = "true" ]; then
   echo ALREADY_INITIALIZED
   vault status -format=json | jq -c '{initialized, sealed, type}' || true
   exit 0
 fi
-vault operator init -format=json -recovery-shares=5 -recovery-threshold=3 | age -a -r '$recipient'
+vault operator init -format=json -recovery-shares=5 -recovery-threshold=3 |
+  jq -c '{recovery_keys_b64, recovery_keys_threshold, root_token}' |
+  age -a -r '$recipient' | sudo install -m 0600 -o root -g root /dev/stdin /root/vault-init.age
+echo "INIT_DONE lines=\$(sudo cat /root/vault-init.age | wc -l)"
 EOF
 )"
   if grep -q ALREADY_INITIALIZED <<<"$out"; then
     ok "Vault is already initialized: $(tail -n1 <<<"$out")"
     return
   fi
-  grep -q 'BEGIN AGE ENCRYPTED FILE' <<<"$out" || die "unexpected output from the VM: $(head -c 300 <<<"$out")"
-  sed -n '/BEGIN AGE ENCRYPTED FILE/,/END AGE ENCRYPTED FILE/p' <<<"$out" | age -d -i "$SSH_KEY" | write_secret_file "$INIT_FILE"
-  jq -e '.root_token and (.recovery_keys_b64 | length == 5)' "$INIT_FILE" >/dev/null || die "init output looks wrong; see $INIT_FILE"
+  grep -qE 'INIT_DONE|PENDING_FETCH' <<<"$out" || die "unexpected output from the VM: $(head -c 300 <<<"$out")"
+  fetch_init_file
   ok "initialized -> $INIT_FILE. NOW copy it into your password manager (recovery keys + root token)."
   vm_exec 120 <<<'VAULT_ADDR=http://127.0.0.1:8200 vault status | grep -E "Initialized|Sealed|Seal Type" || true'
+}
+
+# Fetch /root/vault-init.age in 10-line chunks (each well under Run Command's ~1 KB output limit), decrypt, verify,
+# then delete it on the VM.
+fetch_init_file() {
+  local total start=1 chunk armored=""
+  total="$(vm_exec 120 <<<'sudo cat /root/vault-init.age | wc -l' | tr -dc '0-9')"
+  [[ -n "$total" && "$total" -gt 2 ]] || die "no encrypted init file on the VM"
+  while ((start <= total)); do
+    chunk="$(vm_exec 120 <<<"sudo sed -n '${start},$((start + 9))p' /root/vault-init.age")"
+    armored+="$chunk"$'\n'
+    start=$((start + 10))
+  done
+  grep -q 'END AGE ENCRYPTED FILE' <<<"$armored" || die "incomplete download; rerun make vault-init (the file stays on the VM)"
+  age -d -i "$SSH_KEY" <<<"$armored" | write_secret_file "$INIT_FILE"
+  jq -e '.root_token and (.recovery_keys_b64 | length == 5)' "$INIT_FILE" >/dev/null ||
+    die "decrypted init data looks wrong; the encrypted copy stays on the VM (/root/vault-init.age)"
+  vm_exec 120 <<<'sudo shred -u /root/vault-init.age && echo removed' >/dev/null
 }
 
 root_token() {
@@ -71,23 +94,52 @@ token_or_root() {
   export VAULT_TOKEN
 }
 
+# Copy stdin to the clipboard (Windows from WSL, macOS, or Linux desktops). Returns 1 if there's no clipboard tool.
+to_clipboard() {
+  if have clip.exe; then
+    clip.exe
+  elif have pbcopy; then
+    pbcopy
+  elif have wl-copy; then
+    wl-copy
+  elif have xclip; then
+    xclip -selection clipboard
+  else
+    return 1
+  fi
+}
+
+# Generates a random 32-character password, sets it, and puts it on the clipboard without printing it.
+# PROMPT=1 make vault-admin asks for your own password instead (hidden).
 cmd_admin() {
   token_or_root
   local p1 p2
-  read -r -s -p "New Vault admin password (16+ chars): " p1
-  echo
-  read -r -s -p "Again: " p2
-  echo
-  [[ "$p1" == "$p2" ]] || die "passwords differ"
-  ((${#p1} >= 16)) || die "use at least 16 characters"
+  if [[ "${PROMPT:-0}" == "1" ]]; then
+    read -r -s -p "New Vault admin password (16+ chars): " p1
+    echo
+    read -r -s -p "Again: " p2
+    echo
+    [[ "$p1" == "$p2" ]] || die "passwords differ"
+    ((${#p1} >= 16)) || die "use at least 16 characters"
+  else
+    p1="$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+    ((${#p1} == 32)) || die "couldn't generate a password"
+    printf '%s' "$p1" | to_clipboard || die "no clipboard tool found (clip.exe/pbcopy/wl-copy/xclip); use PROMPT=1 make vault-admin"
+  fi
   printf '%s' "$p1" | vault write auth/userpass/users/admin password=- \
     token_policies=admin token_ttl=1h token_max_ttl=8h >/dev/null
   unset p1 p2
-  ok "admin user set. Save the password in your password manager, then: make vault-login"
+  if [[ "${PROMPT:-0}" == "1" ]]; then
+    ok "admin user set. Save the password in your password manager, then: make vault-login"
+  else
+    ok "admin user set with a new random 32-character password. It's on your CLIPBOARD now (not shown):"
+    info "paste it into your password manager (user: admin, URL: $VAULT_ADDR), then copy something else to clear it"
+    info "next: make vault-login"
+  fi
 }
 
 cmd_login() {
-  vault login -method=userpass username=admin >/dev/null
+  vault login -no-print -method=userpass username=admin
   ok "logged in; token in ~/.vault-token (expires in 1h)"
 }
 
@@ -96,9 +148,13 @@ cmd_mfa_enroll() {
   local method entity url
   method="$(config_output admin_totp_method_id)"
   entity="$(config_output admin_entity_id)"
+  if [[ "${RESET:-0}" == "1" ]]; then
+    vault write identity/mfa/method/totp/admin-destroy method_id="$method" entity_id="$entity" >/dev/null
+    warn "old TOTP secret deleted; delete the old entry in your authenticator app too"
+  fi
   url="$(vault write -format=json identity/mfa/method/totp/admin-generate method_id="$method" entity_id="$entity" |
     jq -r '.data.url // empty')"
-  [[ -n "$url" ]] || die "no TOTP secret returned (already enrolled? destroy it first: vault write identity/mfa/method/totp/admin-destroy ...)"
+  [[ -n "$url" ]] || die "no TOTP secret returned (already enrolled? RESET=1 make vault-mfa-enroll replaces it)"
   if have qrencode; then qrencode -t ANSIUTF8 "$url"; else printf '%s\n' "$url"; fi
   warn "scan this in your authenticator app, then clear the terminal. Next: set enforce_admin_mfa = true in vault-config"
 }

@@ -8,14 +8,21 @@ variables {
 
 run "hardened_defaults" {
   command = apply
+  variables {
+    enforce_admin_mfa = false
+  }
 
   assert {
     condition     = vault_mount.kv.options["version"] == "2"
     error_message = "Secrets must live in a KV v2 mount."
   }
   assert {
-    condition     = vault_quota_rate_limit.login.path == "auth/" && vault_quota_rate_limit.login.rate <= 10
-    error_message = "Login endpoints must be rate limited."
+    condition     = vault_quota_rate_limit.login["userpass"].path == "auth/userpass/" && vault_quota_rate_limit.login["userpass"].rate <= 2
+    error_message = "The human login must have the strictest rate limit."
+  }
+  assert {
+    condition     = vault_identity_mfa_totp.admin.algorithm == "SHA1"
+    error_message = "TOTP must use SHA1: common authenticator apps ignore other algorithms and every code fails."
   }
   assert {
     condition     = length(vault_identity_mfa_login_enforcement.admin) == 0
