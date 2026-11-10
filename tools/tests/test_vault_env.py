@@ -152,11 +152,19 @@ def test_gives_up_after_four_tries(server, tmp_path):
     assert "login" in proc.stderr and "503" in proc.stderr
 
 
+def test_tofu_variable_names_keep_their_case(server, tmp_path):
+    """TF_VAR_<name> carries the variable's own lower-case name (the state passphrase of every stack)."""
+    proc, env_text = run(server, tmp_path, "kv/data/app/providers cloudflare_api_token | TF_VAR_state_passphrase")
+    assert proc.returncode == 0, proc.stderr
+    assert parse_env(env_text) == {"TF_VAR_state_passphrase": "cf-secret"}
+
+
 @pytest.mark.parametrize("secrets, message", [
     ("kv/data/app/providers missing | X", "has no value for 'missing'"),
     ("kv/data/app/nothing key | X", "cannot read kv/data/app/nothing (HTTP 404"),
     ("kv/data/app/providers cloudflare_api_token CLOUDFLARE", "bad line"),
-    ("kv/data/app/providers cloudflare_api_token | lower", "bad variable name"),
+    ("kv/data/app/providers cloudflare_api_token | BAD-NAME", "bad variable name"),
+    ("kv/data/app/providers cloudflare_api_token | 1X", "bad variable name"),
     ("kv/data/../sys key | X", "bad path"),
 ])
 def test_bad_input_fails_without_values(server, tmp_path, secrets, message):

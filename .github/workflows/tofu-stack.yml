@@ -193,7 +193,7 @@ jobs:
         run: |
           while IFS= read -r line; do
             [[ -z "${line// /}" ]] && continue
-            [[ "$line" =~ ^[A-Z_][A-Z0-9_]*=.*$ ]] || { echo "::error::bad env line (NAME=value)"; exit 1; }
+            [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]] || { echo "::error::bad env line (NAME=value)"; exit 1; }
             echo "$line" >> "$GITHUB_ENV"
           done <<<"$EXTRA"
       - name: Pre-plan script
