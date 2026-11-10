@@ -12,7 +12,7 @@ Admin ──OCI Bastion──> SSH (port 22 is never open to the internet)
 |---|---|
 | [`stacks/oci-foundation/`](stacks/oci-foundation/) | The OpenTofu state bucket every stack uses and the tenancy's $1 budget with its alerts (taken over from QuantumOps' `oci.sh`). Laptop-only |
 | [`stacks/vault-server/`](stacks/vault-server/) | Compartment `platform`, VCN, `VM.Standard.E2.1.Micro` (Always Free), reserved IP (its [sslip.io](https://sslip.io) name needs no domain), KMS unseal key, snapshot bucket, Bastion |
-| [`stacks/vault-config/`](stacks/vault-config/) | Vault as code: KV store, audit log, rate limits, admin login with TOTP MFA, GitHub Actions / Kubernetes / AppRole auth, [one module call per project](stacks/vault-config/projects.tf) |
+| [`stacks/vault-config/`](stacks/vault-config/) | Vault as code: KV store, audit log, rate limits, admin login with TOTP MFA, GitHub Actions / Kubernetes / AppRole auth, one project per [`projects/*.yaml`](projects/), the platform's own CI roles |
 | [`stacks/github/`](stacks/github/) | Branch protection for this repo and the `VAULT_ADDR` Actions variable |
 
 Everything runs through `make` (`make help`). OpenTofu state, this repo's and QuantumOps', lives in one versioned OCI
@@ -32,11 +32,15 @@ version tags; each change is tested in this repo before it merges ([docs/contrac
 Where this is going: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Using Vault from a project
-1. Add a `module "<project>"` block to [`stacks/vault-config/projects.tf`](stacks/vault-config/projects.tf), open a PR, merge,
-   then `make plan STACK=vault-config` and `make apply STACK=vault-config`.
-2. Put secrets under `kv/<project>/...`, in the UI or with `vault kv put kv/<project>/name key=value`.
-3. Connect the client. There are examples for Kubernetes (External Secrets), GitHub Actions and AppRole in
-   [docs/runbooks/onboard-project.md](docs/runbooks/onboard-project.md).
+1. **Declare it:** add `projects/<project>.yaml` (its repo, login roles, shared credentials, and the secret keys
+   it needs) in a PR. After the merge, the vault-config stack creates its policies and roles.
+2. **Fill its secrets:** `make vault-seed PROJECT=<project>` asks for each missing key, or takes it from a
+   SOPS file or env files. It never prints a value.
+3. **Connect the client:** in GitHub Actions, the `vault-env` action or `tofu-stack.yml`'s `vault-role` input.
+   The onboarding runbook also has Kubernetes (External Secrets) and AppRole.
+
+Format and examples: [docs/runbooks/onboard-project.md](docs/runbooks/onboard-project.md). GitHub access goes
+through GitHub Apps, not personal tokens: [docs/runbooks/github-apps.md](docs/runbooks/github-apps.md).
 
 Machines never use passwords: Kubernetes and GitHub Actions log in with short-lived JWTs, VMs with AppRole.
 

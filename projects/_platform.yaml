@@ -1,0 +1,24 @@
+# The platform's own CI credentials under kv/platform/<name> (read by the platform-plan and platform-apply
+# roles, stacks/vault-config/platform_ci.tf). Laptop-only stacks (oci-foundation, vault-server) never read them.
+vault:
+  secrets:
+    state:
+      - aws_access_key_id         # the state bucket's S3 key (QOPS ~/.config/qops/oci.env)
+      - aws_secret_access_key
+      - passphrase                # state and plan encryption (~/.config/qops/tofu.env)
+      - bucket                    # not secret; kept with the key so CI needs one read (QOPS_STATE_BUCKET)
+      - namespace                 # QOPS_OCI_NAMESPACE
+      - region                    # QOPS_OCI_REGION
+    github-app:
+      - app_id                    # platform-bot (scripts/github-app.sh platform-bot)
+      - private_key
+  # seed.sh --from-env ~/.config/qops/oci.env --from-env ~/.config/qops/tofu.env takes these from the files
+  # QuantumOps' oci.sh wrote, instead of prompting.
+  from_env:
+    state:
+      aws_access_key_id: AWS_ACCESS_KEY_ID
+      aws_secret_access_key: AWS_SECRET_ACCESS_KEY
+      passphrase: TF_VAR_state_passphrase
+      bucket: QOPS_STATE_BUCKET
+      namespace: QOPS_OCI_NAMESPACE
+      region: QOPS_OCI_REGION

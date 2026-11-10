@@ -7,7 +7,7 @@ VAULT := bash scripts/vault.sh
 
 .PHONY: help tools check lint test-tools plan apply output \
 	vault-bootstrap-status vault-console vault-ssh vault-init vault-admin vault-login vault-mfa-enroll vault-revoke-root \
-	vault-snapshot-setup vault-approle-secret vault-health config-plan-root config-apply-root
+	vault-snapshot-setup vault-approle-secret vault-health vault-seed github-app config-plan-root config-apply-root
 
 help: ## Show targets
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}'
@@ -71,6 +71,12 @@ vault-snapshot-setup: ## Install the snapshot token on the VM and take a snapsho
 
 vault-approle-secret: ## New AppRole secret ID: make vault-approle-secret PROJECT=name
 	$(VAULT) approle-secret
+
+vault-seed: ## Fill a project's secrets: make vault-seed PROJECT=house-manager ARGS="--from-sops <file>"
+	bash scripts/seed.sh $(PROJECT) $(ARGS)
+
+github-app: ## Create a GitHub App, key into Vault: make github-app APP=platform-bot | <project>-bot
+	bash scripts/github-app.sh $(APP)
 
 vault-health: ## Public health check
 	$(VAULT) health

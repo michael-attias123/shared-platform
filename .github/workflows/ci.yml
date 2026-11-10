@@ -42,7 +42,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install 'pytest>=8' -r tools/requirements-telemetry.txt
+      - run: pip install 'pytest>=8' 'PyYAML>=6,<7' -r tools/requirements-telemetry.txt
       - run: python -m pytest tools -q
 
   secrets:

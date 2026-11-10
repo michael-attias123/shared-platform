@@ -14,8 +14,8 @@ through Vault, and use the building blocks at `main` ([contract.md](contract.md)
 | PR | What | Status |
 |---|---|---|
 | SP1 | Layout (`stacks/`), tools, actions, reusable workflows, `modules/secrets-vault`, example consumer | ✅ |
-| SP2 | `oci-foundation`: the state bucket and budgets, imported | in review |
-| SP3 | vault-config from `projects/*.yaml`, platform CI roles, seed script, GitHub Apps | ☐ |
+| SP2 | `oci-foundation`: the state bucket and budgets, imported | ✅ (laptop apply pending) |
+| SP3 | vault-config from `projects/*.yaml`, platform CI roles, seed script, GitHub Apps | in review |
 | HM1 | house-manager reads Vault and uses the building blocks (empty plan) | ☐ |
 | SP4 | github baseline, platform CI/CD, downstream check | ☐ |
 | SP5 | grafana stack (imports from house-manager), dashboard validator moves here | ☐ |

@@ -43,11 +43,85 @@ run "project_module_is_least_privilege" {
   command = apply
 
   assert {
-    condition     = strcontains(module.smoke.read_policy, "smoke-read")
+    condition     = strcontains(module.project["smoke"].read_policy, "smoke-read")
     error_message = "Each project gets its own read policy."
   }
   assert {
-    condition     = module.smoke.github_roles == ["smoke-michael-attias123-shared-platform"]
-    error_message = "The smoke project gets exactly one GitHub role for this repo."
+    condition     = module.project["smoke"].github_roles == ["smoke-michael-attias123-shared-platform"]
+    error_message = "The smoke project keeps its one GitHub role name (vault-smoke.yml logs in with it)."
+  }
+}
+
+run "projects_come_from_yaml" {
+  command = apply
+
+  assert {
+    condition     = !contains(keys(module.project), "_shared") && !contains(keys(module.project), "_platform")
+    error_message = "Files starting with _ list secrets only; they are not projects."
+  }
+  assert {
+    condition = toset(module.project["house-manager"].github_roles) == toset([
+      "house-manager-michael-attias123-house-manager-main",
+      "house-manager-michael-attias123-house-manager-pr",
+    ])
+    error_message = "house-manager gets a main and a pr role."
+  }
+  assert {
+    condition     = module.project["house-manager"].github_role_details["house-manager-michael-attias123-house-manager-pr"].bound_claims["ref"] == "refs/pull/*"
+    error_message = "The pr role is bound to pull request refs."
+  }
+}
+
+run "roles_are_scoped" {
+  command = apply
+
+  assert {
+    condition     = alltrue([for r in values(module.project["house-manager"].github_role_details) : r.bound_claims_type == "glob" && r.bound_claims["repository"] == "michael-attias123/house-manager"])
+    error_message = "Every GitHub role is bound to its project's repo."
+  }
+  assert {
+    condition     = contains(module.project["house-manager"].github_role_details["house-manager-michael-attias123-house-manager-main"].token_policies, "house-manager-michael-attias123-house-manager-main-write")
+    error_message = "The main role may write kv/house-manager/generated."
+  }
+  assert {
+    condition     = !anytrue([for p in module.project["house-manager"].github_role_details["house-manager-michael-attias123-house-manager-pr"].token_policies : endswith(p, "-write")])
+    error_message = "The pr role writes nothing."
+  }
+  assert {
+    condition     = strcontains(module.project["house-manager"].policies["house-manager-michael-attias123-house-manager-main-write"], "kv/data/house-manager/generated")
+    error_message = "The write policy covers only the declared sub-path."
+  }
+  assert {
+    condition     = strcontains(module.project["house-manager"].policies["house-manager-shared"], "kv/data/shared/supabase")
+    error_message = "Declared shared credentials are readable."
+  }
+  assert {
+    condition     = !strcontains(module.project["house-manager"].policies["house-manager-shared"], "kv/data/shared/*")
+    error_message = "Only the declared shared credentials, not all of kv/shared."
+  }
+}
+
+run "platform_ci_roles" {
+  command = apply
+
+  assert {
+    condition     = vault_jwt_auth_backend_role.platform_apply.bound_claims["ref"] == "refs/heads/main" && vault_jwt_auth_backend_role.platform_plan.bound_claims["ref"] == "refs/pull/*"
+    error_message = "platform-apply runs from main only; platform-plan from pull requests."
+  }
+  assert {
+    condition     = alltrue([for r in [vault_jwt_auth_backend_role.platform_apply, vault_jwt_auth_backend_role.platform_plan] : r.bound_claims["repository"] == "michael-attias123/shared-platform"])
+    error_message = "The platform roles belong to this repo."
+  }
+  assert {
+    condition     = strcontains(vault_policy.platform_apply.policy, "path \"kv/data/*\" {\n  capabilities = [\"deny\"]")
+    error_message = "platform-apply never reads projects' secrets."
+  }
+  assert {
+    condition     = strcontains(vault_policy.platform_apply.policy, "path \"auth/userpass/users/*\" {\n  capabilities = [\"deny\"]")
+    error_message = "platform-apply can't set the admin's password."
+  }
+  assert {
+    condition     = !strcontains(vault_policy.platform_plan.policy, "create")
+    error_message = "platform-plan only reads."
   }
 }
