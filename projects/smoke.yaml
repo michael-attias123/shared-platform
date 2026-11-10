@@ -1,0 +1,5 @@
+# End-to-end check of the shared Vault: Actions on this repo's main reads kv/smoke/hello (vault-smoke.yml).
+repo: michael-attias123/shared-platform
+vault:
+  roles:
+    - ref: refs/heads/main          # no suffix: role smoke-michael-attias123-shared-platform

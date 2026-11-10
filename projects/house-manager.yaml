@@ -1,0 +1,37 @@
+# The household app: github.com/michael-attias123/house-manager.
+repo: michael-attias123/house-manager
+vault:
+  roles:
+    # Applies, scheduled jobs and manual runs on main. Writes kv/house-manager/generated (minted OTLP values).
+    - role: main
+      ref: refs/heads/main
+      write: [generated]
+    # infra.yml plans on pull requests (same-repo PRs only: forks get no OIDC token).
+    - role: pr
+      ref: "refs/pull/*"
+  # Account-wide tokens that can't be scoped to one project (kv/shared/<name>).
+  shared_credentials: [supabase, grafana]
+  # What scripts/seed.sh fills and the bootstrap check expects, per path under kv/house-manager/.
+  # The keys of app and monitoring come from house-manager's infra/secrets.enc.yaml (seed.sh --from-sops).
+  secrets:
+    app:
+      - vapid_public_key
+      - vapid_private_key
+      - vapid_subject
+      - push_secret
+      - google_client_id
+      - google_client_secret
+      - supabase_db_password
+      - supabase_db_url
+    monitoring:
+      - grafana_reader_password
+      - alert_webhook_secret
+      - alert_email
+      - gitsync_github_token
+    providers:
+      - cloudflare_api_token
+      - github_app_id             # house-manager-bot (scripts/github-app.sh), replaces GH_ADMIN_TOKEN
+      - github_app_private_key
+    state:
+      - pg_conn                   # the pg backend's connection string (TF_STATE_PG_CONN today)
+      - passphrase                # state and plan encryption (TF_STATE_PASSPHRASE today)

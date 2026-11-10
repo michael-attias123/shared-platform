@@ -1,0 +1,10 @@
+# Account-wide credentials under kv/shared/<name>: tokens a provider won't scope to one project.
+# A project reads one only when its projects/<name>.yaml lists it in vault.shared_credentials.
+# Files starting with _ are not projects: they get no roles, only their secrets list (scripts/seed.sh).
+vault:
+  secrets:
+    supabase:
+      - access_token              # Supabase personal access token (the Management API has no narrower token)
+    grafana:
+      - cloud_token               # Grafana Cloud access policy token (stack-level; the platform takes it over in SP5)
+      - sa_token                  # the stack's service-account token
