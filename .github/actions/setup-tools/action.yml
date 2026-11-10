@@ -1,0 +1,54 @@
+name: setup-tools
+description: >-
+  The pinned infrastructure tools every project uses: OpenTofu always,
+  Terraform, TFLint and actionlint when asked for. Actions are pinned by
+  commit SHA, downloads by sha256. shellcheck, jq and gh come with ubuntu-latest.
+
+inputs:
+  tofu-version:
+    description: OpenTofu version.
+    required: false
+    default: 1.12.8
+  terraform-version:
+    description: Terraform version, for the Terraform compatibility check (empty skips it).
+    required: false
+    default: ''
+  tflint-version:
+    description: TFLint version, e.g. v0.59.1 (empty skips it).
+    required: false
+    default: ''
+  actionlint:
+    description: Install actionlint 1.7.7.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+      with:
+        tofu_version: ${{ inputs.tofu-version }}
+        tofu_wrapper: false
+    - if: inputs.terraform-version != ''
+      uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+    - if: inputs.tflint-version != ''
+      uses: terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6.3.1
+      with:
+        tflint_version: ${{ inputs.tflint-version }}
+    - if: inputs.actionlint == 'true'
+      shell: bash
+      env:
+        VERSION: 1.7.7
+        # From that release's checksums file.
+        SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+      run: |
+        dir="$RUNNER_TEMP/setup-tools"
+        mkdir -p "$dir"
+        curl -sSfL --max-time 60 -o "$dir/actionlint.tar.gz" \
+          "https://github.com/rhysd/actionlint/releases/download/v$VERSION/actionlint_${VERSION}_linux_amd64.tar.gz"
+        echo "$SHA256  $dir/actionlint.tar.gz" | sha256sum --check --quiet
+        tar -xzf "$dir/actionlint.tar.gz" -C "$dir" actionlint
+        echo "$dir" >> "$GITHUB_PATH"

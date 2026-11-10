@@ -10,14 +10,27 @@ Admin ──OCI Bastion──> SSH (port 22 is never open to the internet)
 
 | Stack | What |
 |---|---|
-| [`vault-server/`](vault-server/) | Compartment `platform`, VCN, `VM.Standard.E2.1.Micro` (Always Free), reserved IP (its [sslip.io](https://sslip.io) name needs no domain), KMS unseal key, snapshot bucket, Bastion |
-| [`vault-config/`](vault-config/) | Vault as code: KV store, audit log, rate limits, admin login with TOTP MFA, GitHub Actions / Kubernetes / AppRole auth, [one module call per project](vault-config/projects.tf) |
-| [`github/`](github/) | Branch protection for this repo and the `VAULT_ADDR` Actions variable |
+| [`stacks/vault-server/`](stacks/vault-server/) | Compartment `platform`, VCN, `VM.Standard.E2.1.Micro` (Always Free), reserved IP (its [sslip.io](https://sslip.io) name needs no domain), KMS unseal key, snapshot bucket, Bastion |
+| [`stacks/vault-config/`](stacks/vault-config/) | Vault as code: KV store, audit log, rate limits, admin login with TOTP MFA, GitHub Actions / Kubernetes / AppRole auth, [one module call per project](stacks/vault-config/projects.tf) |
+| [`stacks/github/`](stacks/github/) | Branch protection for this repo and the `VAULT_ADDR` Actions variable |
 
 Everything runs through `make` (`make help`). OpenTofu state is in the same encrypted OCI bucket as QuantumOps.
 
+It also holds the **building blocks every project's CI uses**. Projects reference them at `main`, with no
+version tags; each change is tested in this repo before it merges ([docs/contract.md](docs/contract.md)):
+
+| Folder | What |
+|---|---|
+| [`.github/workflows/`](.github/workflows/) | Reusable workflows: `tofu-stack.yml` (plan with a PR comment, guarded apply, drift issue, outage tolerance), `security.yml` (gitleaks, actionlint, shellcheck, trivy), `gha-telemetry.yml` (CI runs as traces) |
+| [`.github/actions/`](.github/actions/) | `vault-env` (OIDC login to the shared Vault, masked env vars), `setup-tools` (pinned OpenTofu, Terraform, TFLint, actionlint) |
+| [`modules/`](modules/) | OpenTofu modules for projects: `secrets-vault` (a project's KV secrets as one map) |
+| [`tools/`](tools/) | The scripts those workflows run, with tests ([tools/README.md](tools/README.md)) |
+| [`examples/consumer/`](examples/consumer/) | A minimal project stack that `building-blocks.yml` runs the reusable workflows against |
+
+Where this is going: [docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## Using Vault from a project
-1. Add a `module "<project>"` block to [`vault-config/projects.tf`](vault-config/projects.tf), open a PR, merge,
+1. Add a `module "<project>"` block to [`stacks/vault-config/projects.tf`](stacks/vault-config/projects.tf), open a PR, merge,
    then `make plan STACK=vault-config` and `make apply STACK=vault-config`.
 2. Put secrets under `kv/<project>/...`, in the UI or with `vault kv put kv/<project>/name key=value`.
 3. Connect the client. There are examples for Kubernetes (External Secrets), GitHub Actions and AppRole in
@@ -35,4 +48,6 @@ Machines never use passwords: Kubernetes and GitHub Actions log in with short-li
 - **$0:** Always Free shapes only (the code refuses others). Ask before anything that costs money.
 - **No secrets in Git.** Local credentials live in `~/.config/platform/` and `~/.config/qops/` (0600); state is
   encrypted.
-- **Changes go through PRs** with green CI (`make check` and `make lint` locally).
+- **Changes go through PRs** with green CI (`make check`, `make lint` and `make test-tools` locally).
+- **Projects follow `main`.** Keep every change backward compatible, or move the projects first
+  ([docs/contract.md](docs/contract.md)).

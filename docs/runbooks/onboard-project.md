@@ -4,13 +4,13 @@ Each project gets `kv/<project>/*`, a read and a write policy, and login roles. 
 you (admin) write secrets.
 
 ## 1. Declare it
-In [`vault-config/projects.tf`](../../vault-config/projects.tf):
+In [`stacks/vault-config/projects.tf`](../../stacks/vault-config/projects.tf):
 ```hcl
 module "myapp" {
   source = "./modules/project"
   name   = "myapp"
 
-  # Kubernetes: needs vault-config/clusters/<cluster>.pub.pem (the cluster's service-account public key).
+  # Kubernetes: needs stacks/vault-config/clusters/<cluster>.pub.pem (the cluster's service-account public key).
   kubernetes = [{ mount = "jwt-k8s-mycluster", namespace = "external-secrets", service_account = "external-secrets" }]
 
   # GitHub Actions: this repo, only from main.
@@ -32,7 +32,7 @@ vault kv put kv/myapp/database url=... password=-     # "-" reads the value from
 
 ### Kubernetes (External Secrets Operator)
 First add the cluster's public key once:
-- `vault-config/clusters/mycluster.pub.pem`, from the cluster's service-account signing key. In k3s:
+- `stacks/vault-config/clusters/mycluster.pub.pem`, from the cluster's service-account signing key. In k3s:
   `sudo openssl rsa -in /var/lib/rancher/k3s/server/tls/service.key -pubout`.
 - Or for any cluster, convert `kubectl get --raw /openid/v1/jwks`.
 

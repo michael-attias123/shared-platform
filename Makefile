@@ -5,7 +5,7 @@ ARGS ?=
 TOFU := STACK=$(STACK) bash scripts/tofu.sh
 VAULT := bash scripts/vault.sh
 
-.PHONY: help tools check lint plan apply output \
+.PHONY: help tools check lint test-tools plan apply output \
 	vault-bootstrap-status vault-console vault-ssh vault-init vault-admin vault-login vault-mfa-enroll vault-revoke-root \
 	vault-snapshot-setup vault-approle-secret vault-health config-plan-root config-apply-root
 
@@ -21,7 +21,10 @@ check: ## Offline: fmt, validate, mocked tests for all stacks (same as CI)
 	$(TOFU) check
 
 lint: ## shellcheck
-	shellcheck -x -P SCRIPTDIR scripts/*.sh
+	shellcheck -x -P SCRIPTDIR scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/consumer/scripts/*.sh
+
+test-tools: ## The shared tools' tests (pytest; needs tools/requirements-telemetry.txt)
+	python3 -m pytest tools -q
 
 plan: ## Plan a stack: make plan STACK=vault-server|vault-config|github
 	$(TOFU) plan $(ARGS)

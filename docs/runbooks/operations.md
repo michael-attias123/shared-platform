@@ -38,7 +38,7 @@ policies and users come back, including the old recovery configuration.
 
 ## Upgrades
 - **OS:** unattended security upgrades run daily.
-- **Vault** is pinned (`vault_version` in `vault-server/variables.tf`, and `apt-mark hold` on the VM). To upgrade:
+- **Vault** is pinned (`vault_version` in `stacks/vault-server/variables.tf`, and `apt-mark hold` on the VM). To upgrade:
   1. `make vault-ssh`.
   2. `sudo apt-mark unhold vault && sudo apt-get install vault=<new>-1 && sudo apt-mark hold vault && sudo systemctl restart vault`.
   3. Bump `vault_version` in a PR so new VMs match.

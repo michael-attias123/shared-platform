@@ -31,7 +31,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck -x -P SCRIPTDIR scripts/*.sh
+      - run: shellcheck -x -P SCRIPTDIR scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/consumer/scripts/*.sh
+
+  # The shared tools projects run through the reusable workflows.
+  tools:
+    name: tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install 'pytest>=8' -r tools/requirements-telemetry.txt
+      - run: python -m pytest tools -q
 
   secrets:
     name: secret scan

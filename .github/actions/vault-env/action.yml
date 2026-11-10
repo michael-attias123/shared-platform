@@ -1,0 +1,46 @@
+name: vault-env
+description: >-
+  Log in to the shared Vault with the job's GitHub OIDC token (no stored secret)
+  and export the listed KV values as masked environment variables for the
+  following steps. Needs `permissions: id-token: write` on the job.
+
+inputs:
+  addr:
+    description: Vault URL (the VAULT_ADDR Actions variable).
+    required: true
+  role:
+    description: JWT role, <project>-<owner>-<repo>[-<suffix>] (see projects/<name>.yaml).
+    required: true
+  secrets:
+    description: |
+      One per line: `<KV v2 API path> <key> | <ENV_NAME>`, e.g.
+        kv/data/house-manager/providers cloudflare_api_token | CLOUDFLARE_API_TOKEN
+      Blank lines and lines starting with # are ignored.
+    required: false
+    default: ''
+  export-token:
+    description: Also export VAULT_ADDR and VAULT_TOKEN (for the OpenTofu vault provider).
+    required: false
+    default: 'false'
+  mount:
+    description: JWT auth mount.
+    required: false
+    default: jwt-github
+  audience:
+    description: OIDC audience the roles expect.
+    required: false
+    default: vault
+
+runs:
+  using: composite
+  steps:
+    # Inputs travel as environment variables, never as part of the script text.
+    - shell: bash
+      env:
+        VE_ADDR: ${{ inputs.addr }}
+        VE_ROLE: ${{ inputs.role }}
+        VE_SECRETS: ${{ inputs.secrets }}
+        VE_EXPORT_TOKEN: ${{ inputs.export-token }}
+        VE_MOUNT: ${{ inputs.mount }}
+        VE_AUDIENCE: ${{ inputs.audience }}
+      run: '"$GITHUB_ACTION_PATH/vault-env.sh"'
