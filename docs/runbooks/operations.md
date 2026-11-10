@@ -46,7 +46,7 @@ policies and users come back, including the old recovery configuration.
 
 ## Upgrades
 - **OS:** unattended security upgrades run daily.
-- **Vault** is pinned (`vault_version` in `vault-server/variables.tf`, and `apt-mark hold` on the VM). To upgrade:
+- **Vault** is pinned (`vault_version` in `stacks/vault-server/variables.tf`, and `apt-mark hold` on the VM). To upgrade:
   1. `make vault-ssh`.
   2. `sudo apt-mark unhold vault && sudo apt-get install vault=<new>-1 && sudo apt-mark hold vault && sudo systemctl restart vault`.
   3. Bump `vault_version` in a PR so new VMs match.
@@ -70,9 +70,33 @@ couldn't resolve. Clients can pin the IP (`/etc/hosts`, or `--resolve` in curl) 
 domain later is one change: point a DNS A record at the reserved IP, put the name in the Caddyfile and `api_addr`
 on the VM, and update `VAULT_ADDR` in clients.
 
+<<<<<<< HEAD
 ## MFA codes rejected
 - Your phone's clock must be automatic (codes are valid for about 30 seconds either side).
 - Vault uses SHA1 TOTP on purpose: Google and Microsoft Authenticator ignore other algorithms and show wrong codes.
 - To start over with a new QR code (needs a token, e.g. `bash scripts/vault.sh with-root make vault-mfa-enroll`
   during setup, or your admin token): `RESET=1 make vault-mfa-enroll`. Delete the old entry in the app.
 - After 5 wrong codes in a row Vault refuses TOTP for that user for a while; wait a few minutes and try again.
+=======
+## The OCI foundation (state bucket and budget)
+`stacks/oci-foundation` owns the versioned state bucket every stack's backend uses (this repo's and QuantumOps')
+and the tenancy's one budget: $1 a month with alerts at any spend and at $50, $150 and $250. QuantumOps'
+`oci.sh` created them with the OCI CLI. This stack takes them over through `import` blocks that look the ids up
+by name.
+
+**First takeover**, from the laptop:
+```bash
+make plan STACK=oci-foundation    # must read "6 to import, 0 to add, 0 to change, 0 to destroy"
+make apply STACK=oci-foundation
+```
+- **If the plan shows a change:** something differs from what `oci.sh` made (most likely the alert email). Make
+  the code match, or set `QOPS_ALERT_EMAIL` before planning, until the plan is imports only.
+- **The alert email:** it comes from your OCI user (or `QOPS_ALERT_EMAIL`) at plan time and is never committed.
+  The plan prints it, which is fine on a laptop. Don't paste the plan anywhere public.
+- **Deletion:** the bucket and the budget have `prevent_destroy`. Deleting either needs a code change first.
+- **The S3 key:** the key the backends use to reach the bucket stays outside OpenTofu (QuantumOps
+  `make oci-bootstrap ARGS=secret-key`), because its secret would otherwise sit in state.
+- **Credential files:** `scripts/tofu.sh` reads them from `~/.config/platform/state.env` and `tofu.env`, or falls
+  back to QuantumOps' `~/.config/qops/oci.env` and `tofu.env` (same variable names). To move them, copy the two
+  files there with mode 0600.
+>>>>>>> origin/main

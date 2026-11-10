@@ -1,0 +1,103 @@
+name: security
+
+# The checks every project runs on each PR and push: a secret scan of the
+# history (gitleaks), workflow lint (actionlint), shell lint (shellcheck) and,
+# when asked, an IaC misconfiguration scan of one directory (trivy config). Needs no secrets,
+# so it runs on forks too. The caller's job needs contents: read.
+
+on:
+  workflow_call:
+    inputs:
+      shellcheck:
+        description: Shell files to lint, as bash globs (globstar on), space-separated. Empty skips it.
+        type: string
+        default: 'scripts/*.sh'
+      gitleaks-config:
+        description: Path to a gitleaks config in the caller's repo (empty uses gitleaks' defaults).
+        type: string
+        default: ''
+      trivy-dir:
+        description: Directory for trivy config (HIGH and CRITICAL). Empty skips it.
+        type: string
+        default: ''
+      trivy-version:
+        type: string
+        default: v0.70.0
+      platform-ref:
+        type: string
+        default: main
+
+# No top-level permissions: in a called workflow they would cap every job
+# below the caller's grant. The jobs get exactly what the caller's job grants.
+
+jobs:
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_CONFIG: ${{ inputs.gitleaks-config }}
+
+  lint:
+    name: actionlint and shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          repository: michael-attias123/shared-platform
+          ref: ${{ inputs.platform-ref }}
+          path: .shared-platform
+          persist-credentials: false
+      - uses: ./.shared-platform/.github/actions/setup-tools
+        with:
+          actionlint: 'true'
+      - name: actionlint
+        run: actionlint -color -shellcheck= .github/workflows/*.y*ml
+      - name: shellcheck
+        if: inputs.shellcheck != ''
+        env:
+          GLOBS: ${{ inputs.shellcheck }}
+        run: |
+          shopt -s globstar nullglob
+          read -ra patterns <<<"$GLOBS"
+          files=()
+          for p in "${patterns[@]}"; do
+            # shellcheck disable=SC2206 # the glob is the point
+            matched=($p)
+            files+=("${matched[@]}")
+          done
+          if ((${#files[@]} == 0)); then
+            echo "shellcheck: no files match $GLOBS"
+            exit 0
+          fi
+          shellcheck -x -P SCRIPTDIR "${files[@]}"
+          echo "shellcheck: ${#files[@]} file(s) clean"
+
+  trivy:
+    name: trivy config
+    if: inputs.trivy-dir != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ inputs.trivy-version }}
+          scan-type: config
+          scan-ref: ${{ inputs.trivy-dir }}
+          skip-dirs: '**/.terraform'
+          severity: HIGH,CRITICAL
+          exit-code: '1'

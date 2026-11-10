@@ -1,0 +1,56 @@
+name: building-blocks
+
+# Runs the reusable workflows and actions of this repo the way a project does,
+# against examples/consumer, at the PR's own commit: a change to them is
+# tested before any project uses it.
+
+on:
+  pull_request:
+    paths: ['.github/workflows/**', '.github/actions/**', 'tools/**', 'examples/**']
+  push:
+    branches: [main]
+    paths: ['.github/workflows/**', '.github/actions/**', 'tools/**', 'examples/**']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  security:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security.yml
+    with:
+      shellcheck: 'scripts/*.sh tools/*.sh .github/actions/*/*.sh examples/**/*.sh'
+      gitleaks-config: .github/linters/gitleaks.toml
+      platform-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  plan:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: examples/consumer
+      name: example
+      mode: plan
+      guard-protect: terraform_data
+      platform-ref: ${{ github.event.pull_request.head.sha }}
+
+  apply:
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: examples/consumer
+      name: example
+      mode: apply
+      post-apply: examples/consumer/scripts/post-apply.sh
+      platform-ref: ${{ github.event.pull_request.head.sha || github.sha }}

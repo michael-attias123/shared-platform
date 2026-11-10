@@ -1,37 +1,44 @@
 #!/usr/bin/env bash
 # Run OpenTofu for a stack with credentials from local files (never from the repo).
-#   Usage: STACK=vault-server|vault-config|github tofu.sh plan | apply | check | output | <tofu cmd> [args]
+#   Usage: STACK=oci-foundation|vault-server|vault-config|github tofu.sh plan | apply | check | output | <tofu cmd> [args]
 #
 #   plan   save a plan to review; nothing changes yet
 #   apply  apply the saved plan (and only that plan)
 #   check  offline, all stacks: fmt, validate, tests with mocked providers (same as CI)
 #
-# Shared with QuantumOps: the state bucket + S3 key (~/.config/qops/oci.env) and the state passphrase
-# (~/.config/qops/tofu.env). Platform-only: your Vault token (make vault-login).
+# Shared with QuantumOps: the state bucket + S3 key and the state passphrase. They are read from
+# ~/.config/platform/state.env and ~/.config/platform/tofu.env when those exist, else from QuantumOps'
+# ~/.config/qops/oci.env and ~/.config/qops/tofu.env (same variable names). Platform-only: your Vault
+# token (make vault-login).
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STACKS=(vault-server vault-config github)
+STACKS=(oci-foundation vault-server vault-config github)
 STACK_NAME="${STACK:-vault-server}"
-STACK_DIR="$REPO_ROOT/$STACK_NAME"
+STACK_DIR="$REPO_ROOT/stacks/$STACK_NAME"
 PLAN_FILE="$STACK_DIR/.terraform/platform.tfplan"
 QOPS_DIR="${QOPS_CONFIG_DIR:-$HOME/.config/qops}"
-OCI_ENV="$QOPS_DIR/oci.env"
-TOFU_ENV="$QOPS_DIR/tofu.env"
+OCI_ENV="$PLATFORM_CONFIG_DIR/state.env"
+[[ -f "$OCI_ENV" ]] || OCI_ENV="$QOPS_DIR/oci.env"
+TOFU_ENV="$PLATFORM_CONFIG_DIR/tofu.env"
+[[ -f "$TOFU_ENV" ]] || TOFU_ENV="$QOPS_DIR/tofu.env"
 BACKEND_FILE="$PLATFORM_CONFIG_DIR/backend.hcl"
 SSH_PUB="${PLATFORM_SSH_PUBLIC_KEY:-$HOME/.ssh/qops_oci.pub}"
 
 tf() { tofu -chdir="$STACK_DIR" "$@"; }
 
 offline_check() {
-  local s
+  local dir dirs=()
   tofu fmt -check -recursive "$REPO_ROOT"
-  for s in "${STACKS[@]}"; do
-    info "$s"
-    tofu -chdir="$REPO_ROOT/$s" init -backend=false -input=false >/dev/null
-    tofu -chdir="$REPO_ROOT/$s" validate
-    tofu -chdir="$REPO_ROOT/$s" test
+  # Every stack, then every shared module.
+  dirs=("${STACKS[@]/#/stacks/}")
+  while IFS= read -r dir; do dirs+=("$dir"); done < <(cd "$REPO_ROOT" && find modules -mindepth 1 -maxdepth 1 -type d | sort)
+  for dir in "${dirs[@]}"; do
+    info "$dir"
+    tofu -chdir="$REPO_ROOT/$dir" init -backend=false -input=false >/dev/null
+    tofu -chdir="$REPO_ROOT/$dir" validate
+    if [[ -d "$REPO_ROOT/$dir/tests" ]]; then tofu -chdir="$REPO_ROOT/$dir" test; fi
   done
 }
 
@@ -63,6 +70,15 @@ EOF
 
 load_stack() {
   case "$STACK_NAME" in
+    oci-foundation)
+      export TF_VAR_region="$QOPS_OCI_REGION" TF_VAR_oci_profile="$OCI_CLI_PROFILE"
+      TF_VAR_tenancy_ocid="$(oci_cfg tenancy)"
+      TF_VAR_user_ocid="$(oci_cfg user)"
+      export TF_VAR_tenancy_ocid TF_VAR_user_ocid
+      # QuantumOps' oci.sh sent the alerts to QOPS_ALERT_EMAIL when set; keep the same recipient.
+      if [[ -n "${QOPS_ALERT_EMAIL:-}" ]]; then export TF_VAR_alert_email="$QOPS_ALERT_EMAIL"; fi
+      if [[ -n "${QOPS_STATE_BUCKET:-}" ]]; then export TF_VAR_state_bucket="$QOPS_STATE_BUCKET"; fi
+      ;;
     vault-server)
       [[ -f "$SSH_PUB" ]] || die "missing $SSH_PUB (admin SSH key)"
       export TF_VAR_region="$QOPS_OCI_REGION" TF_VAR_oci_profile="$OCI_CLI_PROFILE"

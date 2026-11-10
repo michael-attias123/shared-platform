@@ -7,7 +7,7 @@ crash.log
 
 # Secrets never live in this repo (they're in ~/.config/platform and ~/.config/qops)
 *.pem
-!vault-config/clusters/*.pub.pem
+!stacks/vault-config/clusters/*.pub.pem
 *.key
 .env
 .env.*
@@ -17,3 +17,10 @@ vault-init.json
 .idea/
 .vscode/
 .DS_Store
+
+# Python (tools/)
+__pycache__/
+.pytest_cache/
+
+# Shared modules: the consuming stack locks the providers
+modules/**/.terraform.lock.hcl

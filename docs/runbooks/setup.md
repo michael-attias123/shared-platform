@@ -9,7 +9,7 @@ make tools              # Vault CLI into ~/.local/bin
 ```
 There's no domain to set up. Vault's name is `vault.<public-ip-with-dashes>.sslip.io`. [sslip.io](https://sslip.io)
 is free public DNS that answers such names with the embedded IP. The IP is reserved, so the name never changes.
-Leave `expose_public = false` in [`vault-server/settings.auto.tfvars`](../../vault-server/settings.auto.tfvars).
+Leave `expose_public = false` in [`stacks/vault-server/settings.auto.tfvars`](../../stacks/vault-server/settings.auto.tfvars).
 
 ## 2. Server (not public yet)
 ```bash
@@ -39,7 +39,7 @@ recovery. Vault unseals itself after reboots.
    Paste it into your password manager. To type your own instead: `PROMPT=1 make vault-admin`.
 4. `make vault-login`.
 5. `make vault-mfa-enroll`: scan the QR code with your authenticator app.
-6. Set `enforce_admin_mfa = true` in `vault-config/settings.auto.tfvars` (PR). Then
+6. Set `enforce_admin_mfa = true` in `stacks/vault-config/settings.auto.tfvars` (PR). Then
    `make plan STACK=vault-config` and `make apply STACK=vault-config`. Log in again; it now asks for the code.
 7. `make vault-revoke-root`.
 8. `make vault-snapshot-setup`.
