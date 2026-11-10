@@ -3,8 +3,11 @@
 #   platform-plan   pull requests: plan the CI-applied stacks (vault-config, grafana, github). Reads only.
 #   platform-apply  main: apply them. Manages Vault's configuration, like the admin, but not projects' secrets.
 #   platform-drift  main: the scheduled drift check. The plan policy, so a schedule never holds write access.
-# None reads kv/<project>/* (the projects' own secrets): in Vault the most specific path rule wins, so the
-# kv/data/* deny below holds except where a longer path is allowed.
+# None reads kv/<project>/* (the projects' own secrets). The denies are written as kv/data/+ and kv/data/+/*
+# on purpose: of two matching rules Vault takes the one whose first wildcard comes later, then the one with
+# fewer + segments, then the longer one. So kv/data/platform/* and kv/data/+/platform/* win over the
+# denies, while a plain kv/data/* deny would beat kv/data/+/platform/* (no + against one) and lock the
+# platform out of the folders it mints into.
 
 locals {
   platform_repo = "${var.github_owner}/shared-platform"
@@ -31,10 +34,16 @@ resource "vault_policy" "platform_plan" {
       capabilities = ["read", "sudo"]
     }
     # No project secrets, and no token tricks.
-    path "kv/data/*" {
+    path "kv/data/+" {
       capabilities = ["deny"]
     }
-    path "kv/metadata/*" {
+    path "kv/data/+/*" {
+      capabilities = ["deny"]
+    }
+    path "kv/metadata/+" {
+      capabilities = ["deny"]
+    }
+    path "kv/metadata/+/*" {
       capabilities = ["deny"]
     }
     path "sys/raw/*" {
@@ -56,10 +65,16 @@ resource "vault_policy" "platform_apply" {
       capabilities = ["create", "read", "update", "patch", "delete", "list", "sudo"]
     }
     # Never read or change projects' secrets, and never the raw storage or the root of trust.
-    path "kv/data/*" {
+    path "kv/data/+" {
       capabilities = ["deny"]
     }
-    path "kv/metadata/*" {
+    path "kv/data/+/*" {
+      capabilities = ["deny"]
+    }
+    path "kv/metadata/+" {
+      capabilities = ["deny"]
+    }
+    path "kv/metadata/+/*" {
       capabilities = ["deny"]
     }
     path "sys/raw/*" {
