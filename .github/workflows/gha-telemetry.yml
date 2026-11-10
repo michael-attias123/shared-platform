@@ -31,7 +31,8 @@ on:
         type: string
         default: main
 
-permissions: {}
+# No top-level permissions: in a called workflow they would cap every job
+# below the caller's grant. The jobs get exactly what the caller's job grants.
 
 jobs:
   trace:

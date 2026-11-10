@@ -87,7 +87,8 @@ on:
         description: 0 (no changes), 2 (changes) or skip (a provider was down).
         value: ${{ jobs.tofu.outputs.exitcode }}
 
-permissions: {}
+# No top-level permissions: in a called workflow they would cap every job
+# below the caller's grant. The jobs get exactly what the caller's job grants.
 
 jobs:
   tofu:
