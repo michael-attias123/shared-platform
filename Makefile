@@ -26,7 +26,7 @@ lint: ## shellcheck
 test-tools: ## The shared tools' tests (pytest; needs tools/requirements-telemetry.txt)
 	python3 -m pytest tools -q
 
-plan: ## Plan a stack: make plan STACK=vault-server|vault-config|github
+plan: ## Plan a stack: make plan STACK=oci-foundation|vault-server|vault-config|github
 	$(TOFU) plan $(ARGS)
 
 apply: ## Apply the reviewed plan: make apply STACK=...

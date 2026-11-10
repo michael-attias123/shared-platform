@@ -61,3 +61,25 @@ times out and the console shows `vault-1` *Stopped*. Fix: *Start* it in the cons
 couldn't resolve. Clients can pin the IP (`/etc/hosts`, or `--resolve` in curl) until it's back. Moving to your own
 domain later is one change: point a DNS A record at the reserved IP, put the name in the Caddyfile and `api_addr`
 on the VM, and update `VAULT_ADDR` in clients.
+
+## The OCI foundation (state bucket and budget)
+`stacks/oci-foundation` owns the versioned state bucket every stack's backend uses (this repo's and QuantumOps')
+and the tenancy's one budget: $1 a month with alerts at any spend and at $50, $150 and $250. QuantumOps'
+`oci.sh` created them with the OCI CLI. This stack takes them over through `import` blocks that look the ids up
+by name.
+
+**First takeover**, from the laptop:
+```bash
+make plan STACK=oci-foundation    # must read "6 to import, 0 to add, 0 to change, 0 to destroy"
+make apply STACK=oci-foundation
+```
+- **If the plan shows a change:** something differs from what `oci.sh` made (most likely the alert email). Make
+  the code match, or set `QOPS_ALERT_EMAIL` before planning, until the plan is imports only.
+- **The alert email:** it comes from your OCI user (or `QOPS_ALERT_EMAIL`) at plan time and is never committed.
+  The plan prints it, which is fine on a laptop. Don't paste the plan anywhere public.
+- **Deletion:** the bucket and the budget have `prevent_destroy`. Deleting either needs a code change first.
+- **The S3 key:** the key the backends use to reach the bucket stays outside OpenTofu (QuantumOps
+  `make oci-bootstrap ARGS=secret-key`), because its secret would otherwise sit in state.
+- **Credential files:** `scripts/tofu.sh` reads them from `~/.config/platform/state.env` and `tofu.env`, or falls
+  back to QuantumOps' `~/.config/qops/oci.env` and `tofu.env` (same variable names). To move them, copy the two
+  files there with mode 0600.
