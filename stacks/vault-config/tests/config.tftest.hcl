@@ -140,4 +140,8 @@ run "platform_ci_roles" {
     condition     = strcontains(vault_policy.platform_plan.policy, "path \"sys/mounts/auth/+/tune\" {\n  capabilities = [\"read\", \"sudo\"]")
     error_message = "A plan reads every auth mount's tuning, which Vault only shows with sudo."
   }
+  assert {
+    condition     = vault_jwt_auth_backend_role.platform_drift.bound_claims["ref"] == "refs/heads/main" && vault_jwt_auth_backend_role.platform_drift.token_policies == toset(["platform-plan"])
+    error_message = "The scheduled drift check runs from main with the read-only policy."
+  }
 }

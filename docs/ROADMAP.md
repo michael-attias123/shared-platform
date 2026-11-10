@@ -14,16 +14,27 @@ through Vault, and use the building blocks at `main` ([contract.md](contract.md)
 | PR | What | Status |
 |---|---|---|
 | SP1 | Layout (`stacks/`), tools, actions, reusable workflows, `modules/secrets-vault`, example consumer | ✅ |
-| SP2 | `oci-foundation`: the state bucket and budgets, imported | ✅ (laptop apply pending) |
-| SP3 | vault-config from `projects/*.yaml`, platform CI roles, seed script, GitHub Apps | in review |
-| HM1 | house-manager reads Vault and uses the building blocks (empty plan) | ☐ |
-| SP4 | github baseline, platform CI/CD, downstream check | ☐ |
+| SP2 | `oci-foundation`: the state bucket and the budget, imported | ✅ (laptop apply pending) |
+| SP3 | vault-config from `projects/*.yaml`, platform CI roles, seed script, GitHub Apps | ✅ (laptop apply, seeding and the Apps pending) |
+| HM1 | house-manager reads Vault and uses the building blocks (empty plan) | in review (house-manager#39) |
+| SP4 | github baseline, platform CI/CD, downstream check | in review |
 | SP5 | grafana stack (imports from house-manager), dashboard validator moves here | ☐ |
 | HM2 | house-manager hands over Grafana, SOPS removed | ☐ |
 | QO1 | QuantumOps P4 on the shared Vault (ESO), platform conventions | ☐ |
 
-**Change from the plan:** `validate.py` (the Grafana dashboards and alerts checker, 781 lines of house-manager
-layout rules) moves in SP5, with the `grafana-alerts` module whose file layout it checks. It doesn't move in SP1.
+**Changes from the plan:**
+- **`validate.py`** (the Grafana dashboards and alerts checker, 781 lines of house-manager layout rules) moves
+  in SP5, with the `grafana-alerts` module whose file layout it checks. It doesn't move in SP1.
+- **The downstream check needs no receiver credentials.** The platform starts each project's
+  `platform-check.yml`, waits for the run and reads its result, so a project never reports back with
+  `platform-bot`; `report_to` only names the run.
+- **`platform-bot` has Contents: write** on the repos it is installed on: GitHub ties `repository_dispatch`
+  (`platform-changed`) to it.
+- **`project-changed` waits for SP5,** where it first has something to trigger (the grafana stack), and where a
+  project gets a credential to send it. Until then `platform-apply.yml` can be started from the Actions tab.
+- **Secret scanning is set by a script** (`stacks/github/scripts/repo-security.sh`, after each apply and
+  checked by the drift run): the GitHub provider only has it on the whole `github_repository` resource, which
+  the platform doesn't own.
 
 ## Ownership rules
 1. Each resource has one owner repo.
@@ -44,10 +55,11 @@ stacks/
   grafana/          NEW  stack-level Grafana + per-project spaces                CI-applied
   github/           moved; baseline for every project repo                       CI-applied
 projects/<name>.yaml   one declaration per project (house-manager, quantumops, smoke)
-modules/               used by projects: secrets-vault, grafana-alerts (YAML→rules), grafana-synthetic, vault-project (internal)
-tools/                 python: changes.py, plan_guard.py, transient.py, dashboards validate.py, gha_trace.py (+ tests)
+modules/               used by projects: secrets-vault, grafana-alerts (YAML→rules), grafana-synthetic
+                       (the per-project Vault and GitHub modules are internal: stacks/vault-config/modules/project, stacks/github/modules/baseline)
+tools/                 python: changes.py, plan_guard.py, transient.py, downstream.py, dashboards validate.py, gha_trace.py (+ tests)
 .github/actions/       vault-env (OIDC login + export), setup-tools (pinned + checksums)
-.github/workflows/     reusable: tofu-stack.yml, security.yml, gha-telemetry.yml; own: ci, platform-apply, drift, downstream
+.github/workflows/     reusable: tofu-stack.yml, security.yml, gha-telemetry.yml; own: ci, platform-apply, drift, downstream, platform-check
 examples/consumer/     a minimal project that the in-repo tests run the reusable workflows against
 docs/                  ROADMAP (this plan), contract.md (what a project can rely on), runbooks
 ```
@@ -67,16 +79,16 @@ Moving a stack folder doesn't change its state: the state key is set in the back
 # projects/house-manager.yaml
 repo: michael-attias123/house-manager
 vault:
-  roles: [{ name: main, ref: refs/heads/main, write: [generated] }, { name: pr, ref: "refs/pull/*" }]
-shared_credentials: [supabase]
+  roles: [{ role: main, ref: refs/heads/main, write: [generated] }, { role: pr, ref: "refs/pull/*" }]
+  shared_credentials: [supabase]
 grafana:
   folders: { dashboards: House manager, alerts: House manager alerts }
   otlp: [edge, ci]
   faro_origin: https://house-manager-9y8.pages.dev
   gitsync: { path: observability/dashboards }
   alert_routing: observability/alerting/policies.yaml   # subtree, read from the project repo at plan time
-github: { baseline: true }
-downstream: { workflow: platform-check.yml }
+github: { baseline: true, allowed_actions: [denoland/setup-deno@*] }
+downstream: { workflow: platform-check.yml, changed_event: platform-changed }
 ```
 
 ## Work, as PRs in order
@@ -85,11 +97,11 @@ downstream: { workflow: platform-check.yml }
 ### SP1: layout + shared building blocks (no infra change)
 - **Folders:** move stacks to `stacks/`; update `tofu.sh`, the Makefile, CI and docs.
 - **`tools/`:** port the house-manager scripts with their tests. They're generalized by a config file per consumer:
-  - `changes.py` reads `.platform/changes.yaml`;
+  - `changes.py` reads `.platform/changes.toml`;
   - `plan_guard.py` takes allowed prefixes and protected resource types as arguments;
   - `validate.py` takes its paths and the data-source allowlist as arguments.
-- **`setup-tools` action:** tofu, terraform, tflint, trivy, actionlint and shellcheck, pinned with sha256.
-- **`vault-env` action:** `hashicorp/vault-action` pinned by SHA, JWT login on `jwt-github`, a `vars:` mapping from Vault paths to env names, `exportToken`, and 3 retries.
+- **`setup-tools` action:** tofu, terraform, tflint and actionlint, pinned by commit SHA or sha256. Trivy runs through its pinned action; shellcheck comes with the runner.
+- **`vault-env` action:** its own script (no third-party action): JWT login on `jwt-github`, `<path> <key> | <ENV>` lines, `export-token`, and 4 tries.
 - **`tofu-stack.yml` (`workflow_call`):**
   - **Inputs:** dir, vault role, vault paths, guard args, `pre_plan` / `post_apply` scripts and `drift_issue_label`.
   - **On a PR:** plan with the transient retry, then a PR comment.
@@ -106,7 +118,7 @@ downstream: { workflow: platform-check.yml }
 - 👤 Apply from the laptop. The plan must show only imports.
 
 ### SP3: vault-config driven by projects/*.yaml
-- **Projects from YAML:** `fileset("projects/*.yaml")` + `yamldecode` → `for_each` over `modules/vault-project`. `smoke` becomes `projects/smoke.yaml`.
+- **Projects from YAML:** `fileset("projects/*.yaml")` + `yamldecode` → `for_each` over `stacks/vault-config/modules/project`. `smoke` becomes `projects/smoke.yaml`.
 - **Module features:**
   - a role-name suffix (several roles per repo);
   - `bound_claims_type = "glob"` (`refs/pull/*`);
@@ -115,8 +127,9 @@ downstream: { workflow: platform-check.yml }
   - Kubernetes roles for QuantumOps (`clusters/qops.pub.pem`).
 - **Platform CI roles:**
   - `platform-plan`: shared-platform `refs/pull/*`; reads config and `kv/platform/*`.
-  - `platform-apply`: shared-platform `refs/heads/main`. Policy `platform-admin` manages policies, roles and mounts, and writes `kv/*/platform/*`.
-- **Admin PR comment:** the policy diff is summarized in the plan comment.
+  - `platform-apply`: shared-platform `refs/heads/main`. Its policy manages policies, roles and mounts, and writes `kv/*/platform/*`.
+  - `platform-drift` (added in SP4): `refs/heads/main` with the plan policy, for the scheduled drift check.
+- **Policy changes in review:** the vault-config plan comment on the PR shows each policy's diff (SP4, `platform-apply.yml`).
 - 👤 First apply from the laptop with the admin token (MFA). CI applies from then on.
 - 👤 Seed script `scripts/seed.sh`, run from the laptop:
   - copies house-manager's SOPS values to `kv/house-manager/{app,monitoring}`;
@@ -136,23 +149,24 @@ downstream: { workflow: platform-check.yml }
   - db-migrate, prices, venues, price-probe and telemetry use `vault-env`.
   - The GitHub provider uses a `house-manager-bot` installation token instead of `GH_ADMIN_TOKEN`.
 - **Tools:** delete the local copies of the 5 tools and their tests; CI uses `tools/` at `PLATFORM_REF`.
-- **`platform-check.yml`:** a new workflow that receives the downstream check (`workflow_dispatch`, input `platform_ref`, `report_to`). It runs CI + plan at that ref and reports back with `platform-bot`.
-- **`platform-changed`:** a `repository_dispatch` receiver that runs the apply.
+- **`platform-check.yml`:** a new workflow that receives the downstream check (`workflow_dispatch`, inputs `platform_ref` and `report_to`; [contract.md](contract.md)). It runs the path-rule tests and a full plan at that ref; the run's conclusion is the answer.
+- **`platform-changed`:** a `repository_dispatch` trigger on `infra.yml` that applies main.
 - **Kept for rollback:** SOPS stays in this PR. Merge gate: the plan shows no change except Actions secrets → variables.
 
 ### SP4: github stack + platform CI/CD
-- **github stack, for each project with `baseline: true`:**
-  - a baseline ruleset (PR required, no force push or deletion);
-  - secret scanning + push protection;
-  - Actions default token read-only, plus an allowed-actions list;
-  - the `VAULT_ADDR` variable.
+- **github stack, for each project with `github.baseline: true`:**
+  - a baseline ruleset `platform-baseline` (PR required, no force push or deletion);
+  - secret scanning + push protection (`repo-security.sh`);
+  - Actions default token read-only, plus an allowed-actions list: GitHub's own, what the building blocks use, and the project's `github.allowed_actions`;
+  - the `VAULT_ADDR` variable (`adopt_vault_addr: true` imports one set by hand).
 - **What projects keep:** a separate required-checks ruleset each (rulesets stack). house-manager's `github_branch_protection` becomes a `github_repository_ruleset` with checks only. That change is in HM2, after the baseline exists.
 - **Platform workflows:**
-  - `ci.yml`: changed stacks only, through `tools/changes.py`;
-  - `platform-apply.yml`: on merge, in order vault-config → grafana → github, each through `tofu-stack.yml`, with a destroy guard. Destroying a KV mount, auth backend, audit device, state bucket or project needs the `allow-destroy` label.
-  - `drift.yml`: every 6 hours;
-  - `downstream.yml`, a required check: dispatch `platform-check` to each project, wait, post one comment with each project's plan summary, fail if any failed. After merge, it dispatches `platform-changed` to projects whose plan wasn't empty.
-- **Project changes:** the `project-changed` receiver. When house-manager's alert routing or project declaration inputs change on its main, house-manager dispatches `project-changed`, and the platform applies `grafana`.
+  - `ci.yml`: changed stacks only, through `tools/changes.py` and `.platform/changes.toml`;
+  - `platform-apply.yml`: plans on a PR; on merge applies in order vault-config → grafana (SP5) → github, each through `tofu-stack.yml`, with a destroy guard. Destroying a KV mount, auth backend, audit device, policy or ruleset needs the `allow-destroy` label. (The state bucket is laptop-only and has `prevent_destroy`.)
+  - `drift.yml`: every 6 hours, read-only;
+  - `downstream.yml`, a required check: start `platform-check` in each project, wait, post one comment with each project's plan summary, fail if any failed. After merge, `platform-apply.yml` checks again and sends `platform-changed` to each project whose plan isn't empty.
+  - `platform-check.yml`: this repo's own receiver (it plans `examples/consumer`), so the check is exercised on every PR even before a project has one.
+- **Project changes** (SP5): when house-manager's alert routing or project declaration inputs change on its main, the platform applies `grafana`.
 
 ### SP5: grafana stack (imports from house-manager)
 - **Provider credentials:** from `kv/platform/grafana`.
@@ -171,7 +185,8 @@ downstream: { workflow: platform-check.yml }
   - **Notification tree:** the root is `email-owner`, with one route per project (`project=<name>`). Its children come from the file the project names in `alert_routing`, read with `data "github_repository_file"` at plan time.
   - **Per-project tokens:** a service account (Editor) token per project, plus the SM token, Faro URL and OTLP tokens. All are written to `kv/<project>/platform/grafana`.
   - **Platform folder:** an SM check on Vault's `/v1/sys/health` with a "Vault down/sealed" alert, and a free-tier usage dashboard with alerts at 80% (series, logs, traces, SM executions). It uses the stack's usage data source; its uid gets verified when the stack is built.
-- **When a token rotates:** a rotating token rotated on apply sends `platform-changed` to the project, which re-applies its Edge Function secrets.
+- **When a token rotates:** after an apply that rotated a token, the project's plan has changes, so the platform sends it `platform-changed`, and its apply re-applies its Edge Function secrets.
+- **`project-changed`:** the way for a project to ask for a grafana apply, and the credential it sends it with.
 
 ### HM2: house-manager hands over Grafana + removes SOPS
 - **`removed` blocks:** for every resource SP5 imported.

@@ -1,0 +1,77 @@
+name: drift
+
+# Every 6 hours: does the live Vault configuration and GitHub baseline still match main? A difference opens
+# (or updates) the stack's issue labelled infra-drift; no difference closes it. Read-only: the
+# platform-drift role holds the plan policy. A provider that is down ends as a warning, unless nothing has
+# reached the providers for 6 hours.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: drift
+  cancel-in-progress: false
+
+jobs:
+  vault-config:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      issues: write
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: stacks/vault-config
+      name: vault-config
+      mode: drift
+      tofu-version: 1.13.9
+      vault-role: platform-drift
+      vault-export-token: true
+      env: TERRAFORM_VAULT_SKIP_CHILD_TOKEN=true
+      pre-plan: scripts/ci-backend.sh
+      allow-outage: true
+      platform-ref: ${{ github.sha }}
+      vault-secrets: |
+        kv/data/platform/state aws_access_key_id | AWS_ACCESS_KEY_ID
+        kv/data/platform/state aws_secret_access_key | AWS_SECRET_ACCESS_KEY
+        kv/data/platform/state passphrase | TF_VAR_state_passphrase
+        kv/data/platform/state bucket | STATE_BUCKET
+        kv/data/platform/state namespace | STATE_NAMESPACE
+        kv/data/platform/state region | STATE_REGION
+
+  github:
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      issues: write
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: stacks/github
+      name: github
+      mode: drift
+      tofu-version: 1.13.9
+      vault-role: platform-drift
+      github-app: true
+      github-app-repositories: '*'
+      env: TF_VAR_vault_addr=${{ vars.VAULT_ADDR }}
+      pre-plan: scripts/ci-backend.sh
+      # Secret scanning isn't in the plan: the hook checks it and fails the run when it is off.
+      post-drift: stacks/github/scripts/repo-security.sh
+      allow-outage: true
+      platform-ref: ${{ github.sha }}
+      vault-secrets: |
+        kv/data/platform/state aws_access_key_id | AWS_ACCESS_KEY_ID
+        kv/data/platform/state aws_secret_access_key | AWS_SECRET_ACCESS_KEY
+        kv/data/platform/state passphrase | TF_VAR_state_passphrase
+        kv/data/platform/state bucket | STATE_BUCKET
+        kv/data/platform/state namespace | STATE_NAMESPACE
+        kv/data/platform/state region | STATE_REGION
+        kv/data/platform/github-app app_id | GITHUB_APP_ID
+        kv/data/platform/github-app private_key | GITHUB_APP_PRIVATE_KEY

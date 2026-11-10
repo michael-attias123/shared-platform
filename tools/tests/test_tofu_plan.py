@@ -50,7 +50,9 @@ def run(sim, mode, allow_outage=False, last_hours=1.0, targets=""):
     }
     proc = subprocess.run(["bash", str(TOOLS / "tofu_plan.sh"), "tfplan"], env=env, capture_output=True, text=True)
     count = int((sim / "count").read_text()) if (sim / "count").exists() else 0
-    return proc, out.read_text().strip(), count
+    # The exitcode line; the summary line next to it is checked by test_summary_output.
+    exitcode = "\n".join(line for line in out.read_text().splitlines() if not line.startswith("summary="))
+    return proc, exitcode, count
 
 
 def test_changes(sim):
@@ -97,3 +99,15 @@ def test_targets(sim):
     args = (sim / "args").read_text().splitlines()
     assert "-target=module.observability" in args and "-target=module.uptime" in args
     assert "-out=tfplan" in args
+
+
+@pytest.mark.parametrize("mode, allow_outage, summary", [
+    ("changes", False, "Plan: 1 to add, 0 to change, 0 to destroy."),
+    ("none", False, "No changes."),
+    ("outage", True, "Skipped: a provider was unavailable."),
+    ("real", False, "The plan failed."),
+])
+def test_summary_output(sim, mode, allow_outage, summary):
+    """Callers (a project's platform-check) report this line; it holds counts only."""
+    run(sim, mode, allow_outage=allow_outage)
+    assert f"summary={summary}" in (sim / "out").read_text().splitlines()

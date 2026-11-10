@@ -63,7 +63,16 @@ variable "vault_addr" {
 variable "required_checks" {
   description = "CI job names that must pass before merging into main."
   type        = list(string)
-  default     = ["opentofu", "shellcheck", "secret scan"]
+  # changes: the others are skipped when their area didn't change, and a skipped job passes, so a failed
+  # change detection must block the merge itself. downstream: every project's own CI and plan against the
+  # PR (downstream.yml, docs/contract.md).
+  default = ["changes", "opentofu", "shellcheck", "tools", "secret scan", "downstream"]
+}
+
+variable "take_over" {
+  description = "Import what was set by hand before this stack owned it (baseline.tf). false only for tests."
+  type        = bool
+  default     = true
 }
 
 provider "github" {

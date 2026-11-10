@@ -1,0 +1,15 @@
+# CI areas for .github/workflows/ci.yml and downstream.yml, read by tools/changes.py: a job runs only when
+# a file under one of its prefixes changed. A file under `all` runs every job.
+all = [".github/workflows/ci.yml", ".platform/", "scripts/tofu.sh", "scripts/lib.sh"]
+
+[areas]
+# One per stack, for `tofu.sh check`. projects/*.yaml are inputs of vault-config and github.
+oci_foundation = ["stacks/oci-foundation/"]
+vault_server = ["stacks/vault-server/"]
+vault_config = ["stacks/vault-config/", "projects/"]
+github = ["stacks/github/", "projects/"]
+modules = ["modules/"]
+shell = ["scripts/", "tools/", ".github/actions/", "examples/", "stacks/github/scripts/"]
+tools = ["tools/", ".github/actions/", "scripts/", "stacks/github/scripts/", "projects/"]
+# What a project can see of this repo: the downstream check runs only when one of these changed.
+projects = [".github/", "tools/", "modules/", "projects/", "stacks/", "examples/"]

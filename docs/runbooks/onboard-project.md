@@ -25,10 +25,19 @@ vault:
   shared_credentials: [supabase]          # kv/shared/supabase (listed in projects/_shared.yaml)
   secrets:                                # what `make vault-seed` fills and the bootstrap checks expect
     database: [url, password]
+github:
+  baseline: true                          # the platform's rules on the repo (docs/contract.md)
+  allowed_actions: [acme/setup-thing@*]   # actions its workflows use besides GitHub's and the building blocks'
+downstream:
+  workflow: platform-check.yml            # run against every shared-platform PR (docs/contract.md)
 ```
-After the merge, the vault-config stack applies it: `make plan/apply STACK=vault-config` from the laptop
-until SP4 moves that to CI. A file can't grant a role to another account's repo or to an unknown cluster:
-the stack's `check` blocks fail the plan.
+The PR shows the plan of each stack as a comment; after the merge CI applies them (`platform-apply.yml`). A
+file can't grant a role to another account's repo or to an unknown cluster: the stack's `check` blocks fail
+the plan.
+
+Before asking for the baseline, install `platform-bot` on the repo
+([github-apps.md](github-apps.md)) and check that every workflow that writes with the default token
+(comments, issues, pushes) asks for it in `permissions:`.
 
 Files starting with `_` aren't projects:
 - `_shared.yaml` lists the account-wide credentials under `kv/shared/`;

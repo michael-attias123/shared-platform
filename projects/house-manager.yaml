@@ -35,3 +35,20 @@ vault:
     state:
       - pg_conn                   # the pg backend's connection string (TF_STATE_PG_CONN today)
       - passphrase                # state and plan encryption (TF_STATE_PASSPHRASE today)
+# The platform's baseline on the repo (stacks/github): pull requests only on main, a read-only default
+# Actions token, secret scanning, VAULT_ADDR. The repo keeps its own required-checks rule.
+github:
+  baseline: true
+  # Actions its workflows use besides GitHub's own and the shared building blocks'.
+  allowed_actions:
+    - denoland/setup-deno@*
+    - pnpm/action-setup@*
+    - supabase/setup-cli@*
+  # VAULT_ADDR was set by hand for HM1, before the baseline: the first apply imports it.
+  adopt_vault_addr: true
+# The downstream check (docs/contract.md): every shared-platform PR runs this workflow in the repo before
+# it merges. After a merge that changes house-manager's plan, the platform sends platform-changed, and
+# house-manager's infra.yml applies main.
+downstream:
+  workflow: platform-check.yml
+  changed_event: platform-changed

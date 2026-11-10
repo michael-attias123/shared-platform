@@ -1,0 +1,141 @@
+name: platform-apply
+
+# The stacks CI applies: vault-config, then github (grafana joins between them in SP5).
+#   pull request   plan each, one PR comment per stack
+#   main           apply each in order, behind the destroy guard: deleting a KV mount, an auth method, an
+#                  audit device, a policy or a ruleset needs the allow-destroy label on the PR
+#   Actions tab    apply main again (after a change in Vault that a stack reads)
+# After an apply on main, projects whose own plan now has changes are sent `platform-changed` and apply
+# their main (tools/downstream.py notify). oci-foundation and vault-server are laptop-only: everything here stands on them.
+# Credentials come from kv/platform/* through the job's OIDC token: the platform-plan role on pull
+# requests (reads only), platform-apply on main (stacks/vault-config/platform_ci.tf).
+
+on:
+  pull_request:
+    paths:
+      - 'stacks/vault-config/**'
+      - 'stacks/github/**'
+      - 'projects/**'
+      - 'scripts/ci-backend.sh'
+      - 'tools/**'
+      - '.github/actions/**'
+      - '.github/workflows/platform-apply.yml'
+      - '.github/workflows/tofu-stack.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# One apply at a time; a newer push to a PR replaces its plans.
+concurrency:
+  group: platform-apply-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  vault-config:
+    # Forks get no OIDC token; other branches have no role.
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name != 'pull_request' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: stacks/vault-config
+      name: vault-config
+      mode: ${{ github.event_name == 'pull_request' && 'plan' || 'apply' }}
+      tofu-version: 1.13.9
+      vault-role: ${{ github.event_name == 'pull_request' && 'platform-plan' || 'platform-apply' }}
+      vault-export-token: true
+      # The role's own token is used as it is: platform-plan can't create a child token.
+      env: TERRAFORM_VAULT_SKIP_CHILD_TOKEN=true
+      pre-plan: scripts/ci-backend.sh
+      guard-protect: |
+        vault_mount
+        vault_auth_backend
+        vault_jwt_auth_backend
+        vault_audit
+        vault_policy
+      platform-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      vault-secrets: |
+        kv/data/platform/state aws_access_key_id | AWS_ACCESS_KEY_ID
+        kv/data/platform/state aws_secret_access_key | AWS_SECRET_ACCESS_KEY
+        kv/data/platform/state passphrase | TF_VAR_state_passphrase
+        kv/data/platform/state bucket | STATE_BUCKET
+        kv/data/platform/state namespace | STATE_NAMESPACE
+        kv/data/platform/state region | STATE_REGION
+
+  github:
+    needs: vault-config
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/tofu-stack.yml
+    with:
+      dir: stacks/github
+      name: github
+      mode: ${{ github.event_name == 'pull_request' && 'plan' || 'apply' }}
+      tofu-version: 1.13.9
+      vault-role: ${{ github.event_name == 'pull_request' && 'platform-plan' || 'platform-apply' }}
+      # platform-bot, on every repo it is installed on: the baseline spans the projects' repos.
+      github-app: true
+      github-app-repositories: '*'
+      env: TF_VAR_vault_addr=${{ vars.VAULT_ADDR }}
+      pre-plan: scripts/ci-backend.sh
+      post-apply: stacks/github/scripts/repo-security.sh
+      guard-protect: github_repository_ruleset
+      platform-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      vault-secrets: |
+        kv/data/platform/state aws_access_key_id | AWS_ACCESS_KEY_ID
+        kv/data/platform/state aws_secret_access_key | AWS_SECRET_ACCESS_KEY
+        kv/data/platform/state passphrase | TF_VAR_state_passphrase
+        kv/data/platform/state bucket | STATE_BUCKET
+        kv/data/platform/state namespace | STATE_NAMESPACE
+        kv/data/platform/state region | STATE_REGION
+        kv/data/platform/github-app app_id | GITHUB_APP_ID
+        kv/data/platform/github-app private_key | GITHUB_APP_PRIVATE_KEY
+
+  # After the applies: each project's plan against the new main; a project with changes is sent platform-changed.
+  notify:
+    name: notify projects
+    needs: github
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/vault-env
+        with:
+          addr: ${{ vars.VAULT_ADDR }}
+          role: platform-apply
+          secrets: |
+            kv/data/platform/github-app app_id | GITHUB_APP_ID
+            kv/data/platform/github-app private_key | GITHUB_APP_PRIVATE_KEY
+      - id: app_token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ env.GITHUB_APP_ID }}
+          private-key: ${{ env.GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - run: pip install 'PyYAML>=6,<7'
+      - name: Check each project and tell the changed ones
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 tools/downstream.py notify --ref "$GITHUB_SHA" --comment "$RUNNER_TEMP/downstream.md"
+      - name: Summary
+        if: always()
+        run: if [[ -f "$RUNNER_TEMP/downstream.md" ]]; then cat "$RUNNER_TEMP/downstream.md" >> "$GITHUB_STEP_SUMMARY"; fi

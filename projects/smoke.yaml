@@ -3,3 +3,7 @@ repo: michael-attias123/shared-platform
 vault:
   roles:
     - ref: refs/heads/main          # no suffix: role smoke-michael-attias123-shared-platform
+# The downstream check's own example: .github/workflows/platform-check.yml in this repo plans
+# examples/consumer against every platform PR, the way a project's receiver does.
+downstream:
+  workflow: platform-check.yml
